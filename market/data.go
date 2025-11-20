@@ -25,57 +25,57 @@ var (
 )
 
 // Get 获取指定代币的市场数据
-func Get(symbol string) (*Data, error) {
-	var klines3m, klines4h []Kline
+func Get(symbol string, shortTF string, longTF string) (*Data, error) {
+	var klinesShort, klinesLong []Kline
 	var err error
 	// 标准化symbol
 	symbol = Normalize(symbol)
-	// 获取3分钟K线数据 (最近10个)
-	klines3m, err = WSMonitorCli.GetCurrentKlines(symbol, "3m") // 多获取一些用于计算
+	// 获取短周期K线数据
+	klinesShort, err = WSMonitorCli.GetCurrentKlines(symbol, shortTF)
 	if err != nil {
-		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
+		return nil, fmt.Errorf("获取%s K线失败: %v", shortTF, err)
 	}
 
 	// Data staleness detection: Prevent DOGEUSDT-style price freeze issues
-	if isStaleData(klines3m, symbol) {
+	if isStaleData(klinesShort, symbol) {
 		log.Printf("⚠️  WARNING: %s detected stale data (consecutive price freeze), skipping symbol", symbol)
 		return nil, fmt.Errorf("%s data is stale, possible cache failure", symbol)
 	}
 
-	// 获取4小时K线数据 (最近10个)
-	klines4h, err = WSMonitorCli.GetCurrentKlines(symbol, "4h") // 多获取用于计算指标
+	// 获取长周期K线数据
+	klinesLong, err = WSMonitorCli.GetCurrentKlines(symbol, longTF)
 	if err != nil {
-		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
+		return nil, fmt.Errorf("获取%s K线失败: %v", longTF, err)
 	}
 
 	// 检查数据是否为空
-	if len(klines3m) == 0 {
-		return nil, fmt.Errorf("3分钟K线数据为空")
+	if len(klinesShort) == 0 {
+		return nil, fmt.Errorf("%s K线数据为空", shortTF)
 	}
-	if len(klines4h) == 0 {
-		return nil, fmt.Errorf("4小时K线数据为空")
+	if len(klinesLong) == 0 {
+		return nil, fmt.Errorf("%s K线数据为空", longTF)
 	}
 
-	// 计算当前指标 (基于3分钟最新数据)
-	currentPrice := klines3m[len(klines3m)-1].Close
-	currentEMA20 := calculateEMA(klines3m, 20)
-	currentMACD := calculateMACD(klines3m)
-	currentRSI7 := calculateRSI(klines3m, 7)
+	// 计算当前指标 (基于短周期最新数据)
+	currentPrice := klinesShort[len(klinesShort)-1].Close
+	currentEMA20 := calculateEMA(klinesShort, 20)
+	currentMACD := calculateMACD(klinesShort)
+	currentRSI7 := calculateRSI(klinesShort, 7)
 
 	// 计算价格变化百分比
-	// 1小时价格变化 = 20个3分钟K线前的价格
+	// 短周期价格变化 (例如：20个短周期K线前的价格)
 	priceChange1h := 0.0
-	if len(klines3m) >= 21 { // 至少需要21根K线 (当前 + 20根前)
-		price1hAgo := klines3m[len(klines3m)-21].Close
+	if len(klinesShort) >= 21 { // 至少需要21根K线 (当前 + 20根前)
+		price1hAgo := klinesShort[len(klinesShort)-21].Close
 		if price1hAgo > 0 {
 			priceChange1h = ((currentPrice - price1hAgo) / price1hAgo) * 100
 		}
 	}
 
-	// 4小时价格变化 = 1个4小时K线前的价格
+	// 长周期价格变化 (例如：1个长周期K线前的价格)
 	priceChange4h := 0.0
-	if len(klines4h) >= 2 {
-		price4hAgo := klines4h[len(klines4h)-2].Close
+	if len(klinesLong) >= 2 {
+		price4hAgo := klinesLong[len(klinesLong)-2].Close
 		if price4hAgo > 0 {
 			priceChange4h = ((currentPrice - price4hAgo) / price4hAgo) * 100
 		}
@@ -91,11 +91,11 @@ func Get(symbol string) (*Data, error) {
 	// 获取Funding Rate
 	fundingRate, _ := getFundingRate(symbol)
 
-	// 计算日内系列数据
-	intradayData := calculateIntradaySeries(klines3m)
+	// 计算日内系列数据 (基于短周期)
+	intradayData := calculateIntradaySeries(klinesShort)
 
-	// 计算长期数据
-	longerTermData := calculateLongerTermData(klines4h)
+	// 计算长期数据 (基于长周期)
+	longerTermData := calculateLongerTermData(klinesLong)
 
 	return &Data{
 		Symbol:            symbol,
@@ -109,6 +109,8 @@ func Get(symbol string) (*Data, error) {
 		FundingRate:       fundingRate,
 		IntradaySeries:    intradayData,
 		LongerTermContext: longerTermData,
+		ShortTimeframe:    shortTF,
+		LongTimeframe:     longTF,
 	}, nil
 }
 
@@ -229,12 +231,14 @@ func calculateATR(klines []Kline, period int) float64 {
 // calculateIntradaySeries 计算日内系列数据
 func calculateIntradaySeries(klines []Kline) *IntradayData {
 	data := &IntradayData{
-		MidPrices:   make([]float64, 0, 10),
-		EMA20Values: make([]float64, 0, 10),
-		MACDValues:  make([]float64, 0, 10),
-		RSI7Values:  make([]float64, 0, 10),
-		RSI14Values: make([]float64, 0, 10),
-		Volume:      make([]float64, 0, 10),
+		MidPrices:    make([]float64, 0, 10),
+		EMA20Values:  make([]float64, 0, 10),
+		MACDValues:   make([]float64, 0, 10),
+		RSI7Values:   make([]float64, 0, 10),
+		RSI14Values:  make([]float64, 0, 10),
+		RSI20Values:  make([]float64, 0, 10),
+		RSI100Values: make([]float64, 0, 10),
+		Volume:       make([]float64, 0, 10),
 	}
 
 	// 获取最近10个数据点
@@ -267,6 +271,14 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 		if i >= 14 {
 			rsi14 := calculateRSI(klines[:i+1], 14)
 			data.RSI14Values = append(data.RSI14Values, rsi14)
+		}
+		if i >= 20 {
+			rsi20 := calculateRSI(klines[:i+1], 20)
+			data.RSI20Values = append(data.RSI20Values, rsi20)
+		}
+		if i >= 100 {
+			rsi100 := calculateRSI(klines[:i+1], 100)
+			data.RSI100Values = append(data.RSI100Values, rsi100)
 		}
 	}
 
@@ -431,7 +443,7 @@ func Format(data *Data) string {
 	sb.WriteString(fmt.Sprintf("Funding Rate: %.2e\n\n", data.FundingRate))
 
 	if data.IntradaySeries != nil {
-		sb.WriteString("Intraday series (3‑minute intervals, oldest → latest):\n\n")
+		sb.WriteString(fmt.Sprintf("Intraday series (%s intervals, oldest → latest):\n\n", data.ShortTimeframe))
 
 		if len(data.IntradaySeries.MidPrices) > 0 {
 			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.IntradaySeries.MidPrices)))
@@ -453,15 +465,23 @@ func Format(data *Data) string {
 			sb.WriteString(fmt.Sprintf("RSI indicators (14‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI14Values)))
 		}
 
+		if len(data.IntradaySeries.RSI20Values) > 0 {
+			sb.WriteString(fmt.Sprintf("RSI indicators (20‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI20Values)))
+		}
+
+		if len(data.IntradaySeries.RSI100Values) > 0 {
+			sb.WriteString(fmt.Sprintf("RSI indicators (100‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI100Values)))
+		}
+
 		if len(data.IntradaySeries.Volume) > 0 {
 			sb.WriteString(fmt.Sprintf("Volume: %s\n\n", formatFloatSlice(data.IntradaySeries.Volume)))
 		}
 
-		sb.WriteString(fmt.Sprintf("3m ATR (14‑period): %.3f\n\n", data.IntradaySeries.ATR14))
+		sb.WriteString(fmt.Sprintf("%s ATR (14‑period): %.3f\n\n", data.ShortTimeframe, data.IntradaySeries.ATR14))
 	}
 
 	if data.LongerTermContext != nil {
-		sb.WriteString("Longer‑term context (4‑hour timeframe):\n\n")
+		sb.WriteString(fmt.Sprintf("Longer‑term context (%s timeframe):\n\n", data.LongTimeframe))
 
 		sb.WriteString(fmt.Sprintf("20‑Period EMA: %.3f vs. 50‑Period EMA: %.3f\n\n",
 			data.LongerTermContext.EMA20, data.LongerTermContext.EMA50))

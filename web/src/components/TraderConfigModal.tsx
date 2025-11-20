@@ -26,8 +26,12 @@ interface TraderConfigData {
   is_cross_margin: boolean
   use_coin_pool: boolean
   use_oi_top: boolean
+  initial_stop_loss_pct: number
+  chandelier_atr_mult: number
   initial_balance?: number // 可选：创建时不需要，编辑时使用
   scan_interval_minutes: number
+  short_timeframe: string
+  long_timeframe: string
 }
 
 interface TraderConfigModalProps {
@@ -63,7 +67,11 @@ export function TraderConfigModal({
     is_cross_margin: true,
     use_coin_pool: false,
     use_oi_top: false,
+    initial_stop_loss_pct: 0.2,
+    chandelier_atr_mult: 3.0,
     scan_interval_minutes: 3,
+    short_timeframe: '5m',
+    long_timeframe: '1h',
   })
   const [isSaving, setIsSaving] = useState(false)
   const [availableCoins, setAvailableCoins] = useState<string[]>([])
@@ -99,7 +107,11 @@ export function TraderConfigModal({
         use_coin_pool: false,
         use_oi_top: false,
         initial_balance: 1000,
+        initial_stop_loss_pct: 0.2,
+        chandelier_atr_mult: 3.0,
         scan_interval_minutes: 3,
+        short_timeframe: '5m',
+        long_timeframe: '1h',
       })
     }
     // 确保旧数据也有默认的 system_prompt_template
@@ -244,6 +256,8 @@ export function TraderConfigModal({
         name: formData.trader_name,
         ai_model_id: formData.ai_model,
         exchange_id: formData.exchange_id,
+        initial_stop_loss_pct: formData.initial_stop_loss_pct,
+        chandelier_atr_mult: formData.chandelier_atr_mult,
         btc_eth_leverage: formData.btc_eth_leverage,
         altcoin_leverage: formData.altcoin_leverage,
         trading_symbols: formData.trading_symbols,
@@ -254,6 +268,8 @@ export function TraderConfigModal({
         use_coin_pool: formData.use_coin_pool,
         use_oi_top: formData.use_oi_top,
         scan_interval_minutes: formData.scan_interval_minutes,
+        short_timeframe: formData.short_timeframe,
+        long_timeframe: formData.long_timeframe,
       }
 
       // 只在编辑模式时包含initial_balance（用于手动更新）
@@ -373,6 +389,56 @@ export function TraderConfigModal({
                   </select>
                 </div>
               </div>
+
+              {/* 止损参数：初始止损比例 + 吊灯ATR倍数 */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-[#EAECEF] block mb-2">
+                    初始止损价格比例 (%)
+                  </label>
+                  <input
+                    type="number"
+                    value={((formData.initial_stop_loss_pct ?? 0.2) * 100).toFixed(1)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      const pct = Number.isFinite(v)
+                        ? Math.max(1, Math.min(80, v))
+                        : 20
+                      handleInputChange('initial_stop_loss_pct', pct / 100)
+                    }}
+                    className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+                    min={1}
+                    max={80}
+                    step={0.5}
+                  />
+                  <p className="text-xs text-[#848E9C] mt-1">
+                    例如 20 表示价格相对入场价回撤 20% 时触发初始止损保护
+                  </p>
+                </div>
+                <div>
+                  <label className="text-sm text-[#EAECEF] block mb-2">
+                    吊灯止损 ATR 倍数
+                  </label>
+                  <input
+                    type="number"
+                    value={formData.chandelier_atr_mult ?? 3.0}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      const safe = Number.isFinite(v)
+                        ? Math.max(1, Math.min(10, v))
+                        : 3
+                      handleInputChange('chandelier_atr_mult', safe)
+                    }}
+                    className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+                    min={1}
+                    max={10}
+                    step={0.5}
+                  />
+                  <p className="text-xs text-[#848E9C] mt-1">
+                    数值越大止损越宽松，常用范围 2.0 - 4.0
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -392,11 +458,10 @@ export function TraderConfigModal({
                     <button
                       type="button"
                       onClick={() => handleInputChange('is_cross_margin', true)}
-                      className={`flex-1 px-3 py-2 rounded text-sm ${
-                        formData.is_cross_margin
-                          ? 'bg-[#F0B90B] text-black'
-                          : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
-                      }`}
+                      className={`flex-1 px-3 py-2 rounded text-sm ${formData.is_cross_margin
+                        ? 'bg-[#F0B90B] text-black'
+                        : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
+                        }`}
                     >
                       全仓
                     </button>
@@ -405,11 +470,10 @@ export function TraderConfigModal({
                       onClick={() =>
                         handleInputChange('is_cross_margin', false)
                       }
-                      className={`flex-1 px-3 py-2 rounded text-sm ${
-                        !formData.is_cross_margin
-                          ? 'bg-[#F0B90B] text-black'
-                          : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
-                      }`}
+                      className={`flex-1 px-3 py-2 rounded text-sm ${!formData.is_cross_margin
+                        ? 'bg-[#F0B90B] text-black'
+                        : 'bg-[#0B0E11] text-[#848E9C] border border-[#2B3139]'
+                        }`}
                     >
                       逐仓
                     </button>
@@ -488,8 +552,8 @@ export function TraderConfigModal({
                 )}
               </div>
 
-              {/* 第二行：AI 扫描决策间隔 */}
-              <div className="grid grid-cols-2 gap-4">
+              {/* 第二行：AI 扫描决策间隔 + 时间周期 */}
+              <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="text-sm text-[#EAECEF] block mb-2">
                     {t('aiScanInterval', language)}
@@ -509,11 +573,68 @@ export function TraderConfigModal({
                     max="60"
                     step="1"
                   />
-                  <p className="text-xs text-gray-500 mt-1">
-                    {t('scanIntervalRecommend', language)}
-                  </p>
                 </div>
-                <div></div>
+
+                <div>
+                  <label className="text-sm text-[#EAECEF] block mb-2">
+                    短周期 K 线 (Short Timeframe)
+                    <span className="text-xs text-[#848E9C] ml-2">
+                      (入场点)
+                    </span>
+                  </label>
+                  <select
+                    value={formData.short_timeframe}
+                    onChange={(e) =>
+                      handleInputChange('short_timeframe', e.target.value)
+                    }
+                    className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+                  >
+                    <option value="1m">1 分钟 (超短线)</option>
+                    <option value="3m">3 分钟 (快速)</option>
+                    <option value="5m">5 分钟 (推荐)</option>
+                    <option value="15m">15 分钟 (稳健)</option>
+                    <option value="30m">30 分钟 (长线)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-sm text-[#EAECEF] block mb-2">
+                    长周期 K 线 (Long Timeframe)
+                    <span className="text-xs text-[#848E9C] ml-2">
+                      (趋势判断)
+                    </span>
+                  </label>
+                  <select
+                    value={formData.long_timeframe}
+                    onChange={(e) =>
+                      handleInputChange('long_timeframe', e.target.value)
+                    }
+                    className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+                  >
+                    <option value="1h">1 小时 (推荐)</option>
+                    <option value="4h">4 小时 (波段)</option>
+                    <option value="1d">1 天 (趋势)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* 策略建议提示 */}
+              <div className="p-3 bg-[#0B0E11] border border-[#2B3139] rounded text-xs text-[#848E9C]">
+                💡 策略建议：
+                <ul className="mt-1 space-y-1 ml-4">
+                  <li>
+                    • <strong className="text-[#F0B90B]">5m + 1h</strong>
+                    ：适合 1-6 小时的短线交易
+                  </li>
+                  <li>
+                    • <strong className="text-[#F0B90B]">15m + 4h</strong>
+                    ：适合 4-24 小时的波段交易
+                  </li>
+                  <li>
+                    • <strong className="text-[#F0B90B]">1m + 5m</strong>
+                    ：适合超短线（高风险）
+                  </li>
+                </ul>
               </div>
 
               {/* 第三行：杠杆设置 */}
@@ -592,11 +713,10 @@ export function TraderConfigModal({
                           key={coin}
                           type="button"
                           onClick={() => handleCoinToggle(coin)}
-                          className={`px-2 py-1 text-xs rounded transition-colors ${
-                            selectedCoins.includes(coin)
-                              ? 'bg-[#F0B90B] text-black'
-                              : 'bg-[#1E2329] text-[#848E9C] border border-[#2B3139] hover:border-[#F0B90B]'
-                          }`}
+                          className={`px-2 py-1 text-xs rounded transition-colors ${selectedCoins.includes(coin)
+                            ? 'bg-[#F0B90B] text-black'
+                            : 'bg-[#1E2329] text-[#848E9C] border border-[#2B3139] hover:border-[#F0B90B]'
+                            }`}
                         >
                           {coin.replace('USDT', '')}
                         </button>

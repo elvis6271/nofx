@@ -55,7 +55,9 @@ type AutoTraderConfig struct {
 	ScanInterval time.Duration // 扫描间隔（建议3分钟）
 
 	// 账户配置
-	InitialBalance float64 // 初始金额（用于计算盈亏，需手动设置）
+	InitialBalance     float64 // 初始金额（用于计算盈亏，需手动设置）
+	InitialStopLossPct float64 // 初始价格止损百分比（如0.2=20%）
+	ChandelierAtrMult  float64 // 吊灯止损ATR倍数（如3.0）
 
 	// 杠杆配置
 	BTCETHLeverage  int // BTC和ETH的杠杆倍数
@@ -70,8 +72,15 @@ type AutoTraderConfig struct {
 	IsCrossMargin bool // true=全仓模式, false=逐仓模式
 
 	// 币种配置
-	DefaultCoins []string // 默认币种列表（从数据库获取）
-	TradingCoins []string // 实际交易币种列表
+	DefaultCoins    []string // 默认币种列表（从数据库获取）
+	TradingCoins    []string // 实际交易币种列表
+	UseDefaultCoins bool     // 是否使用系统默认币种（来自config.json/use_default_coins）
+	UseCoinPool     bool     // 此Trader是否启用 Coin Pool 信号源
+	UseOITop        bool     // 此Trader是否启用 OI Top 信号源
+
+	// K线周期配置
+	ShortTimeframe string // 短周期K线（如："5m", "15m"）
+	LongTimeframe  string // 长周期K线（如："1h", "4h"）
 
 	// 系统提示词模板
 	SystemPromptTemplate string // 系统提示词模板名称（如 "default", "aggressive"）
@@ -94,6 +103,9 @@ type AutoTrader struct {
 	systemPromptTemplate  string   // 系统提示词模板名称
 	defaultCoins          []string // 默认币种列表（从数据库获取）
 	tradingCoins          []string // 实际交易币种列表
+	useDefaultCoins       bool     // 是否使用系统默认币种
+	useCoinPool           bool     // 是否启用 Coin Pool 信号源
+	useOITop              bool     // 是否启用 OI Top 信号源
 	lastResetTime         time.Time
 	stopUntil             time.Time
 	isRunning             bool
@@ -104,6 +116,8 @@ type AutoTrader struct {
 	monitorWg             sync.WaitGroup     // 用于等待监控goroutine结束
 	peakPnLCache          map[string]float64 // 最高收益缓存 (symbol -> 峰值盈亏百分比)
 	peakPnLCacheMutex     sync.RWMutex       // 缓存读写锁
+	stopLossCache         map[string]float64 // 当前止损缓存 (symbol_side -> stopLoss)
+	stopLossCacheMutex    sync.RWMutex       // 止损缓存读写锁
 	lastBalanceSyncTime   time.Time          // 上次余额同步时间
 	database              interface{}        // 数据库引用（用于自动更新余额）
 	userID                string             // 用户ID
@@ -115,6 +129,14 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 	if config.ID == "" {
 		config.ID = "default_trader"
 	}
+
+	// 设置默认止损相关参数
+	if config.InitialStopLossPct <= 0 {
+		config.InitialStopLossPct = 0.2
+	}
+	if config.ChandelierAtrMult <= 0 {
+		config.ChandelierAtrMult = 3.0
+	}
 	if config.Name == "" {
 		config.Name = "Default Trader"
 	}
@@ -124,6 +146,14 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 		} else {
 			config.AIModel = "deepseek"
 		}
+	}
+
+	// 设置默认K线周期，避免interval为空导致Binance报错
+	if config.ShortTimeframe == "" {
+		config.ShortTimeframe = "5m"
+	}
+	if config.LongTimeframe == "" {
+		config.LongTimeframe = "1h"
 	}
 
 	mcpClient := mcp.New()
@@ -232,6 +262,8 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 		monitorWg:             sync.WaitGroup{},
 		peakPnLCache:          make(map[string]float64),
 		peakPnLCacheMutex:     sync.RWMutex{},
+		stopLossCache:         make(map[string]float64),
+		stopLossCacheMutex:    sync.RWMutex{},
 		lastBalanceSyncTime:   time.Now(), // 初始化为当前时间
 		database:              database,
 		userID:                userID,
@@ -253,6 +285,7 @@ func (at *AutoTrader) Run() error {
 
 	// 启动回撤监控
 	at.startDrawdownMonitor()
+	at.startChandelierStopManager()
 
 	ticker := time.NewTicker(at.config.ScanInterval)
 	defer ticker.Stop()
@@ -629,6 +662,8 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		Positions:      positionInfos,
 		CandidateCoins: candidateCoins,
 		Performance:    performance, // 添加历史表现分析
+		ShortTimeframe: at.config.ShortTimeframe,
+		LongTimeframe:  at.config.LongTimeframe,
 	}
 
 	return ctx, nil
@@ -674,7 +709,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	}
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	marketData, err := market.Get(decision.Symbol, at.config.ShortTimeframe, at.config.LongTimeframe)
 	if err != nil {
 		return err
 	}
@@ -728,10 +763,34 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// 设置止损止盈
-	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ 设置止损失败: %v", err)
+	// 计算初始止损（20% 初始止损 + LLM 提供止损，谁更保守谁生效）
+	entryPrice := marketData.CurrentPrice
+	slFromLLM := decision.StopLoss
+	var sl20 float64
+	if at.config.InitialStopLossPct > 0 {
+		sl20 = entryPrice * (1 - at.config.InitialStopLossPct)
 	}
+	currentSL, _ := at.getStopLossFromCache(decision.Symbol, "long")
+	newStop := at.computeStopLossPriority("LONG", entryPrice, currentSL, sl20, slFromLLM, 0)
+
+	// 设置止损（优先使用优先级计算结果，其次兜底使用 LLM 止损）
+	if newStop > 0 {
+		if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, newStop); err != nil {
+			log.Printf("  ⚠ 设置止损失败: %v", err)
+		} else {
+			at.setStopLossCache(decision.Symbol, "long", newStop)
+		}
+	} else if slFromLLM > 0 {
+		if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, slFromLLM); err != nil {
+			log.Printf("  ⚠ 设置止损失败: %v", err)
+		} else {
+			at.setStopLossCache(decision.Symbol, "long", slFromLLM)
+		}
+	} else {
+		log.Printf("  ⚠ 未能为 %s 设置初始止损（计算结果无效且 AI 未提供止损），建议检查配置", decision.Symbol)
+	}
+
+	// 设置止盈仍由 AI 提供
 	if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
 		log.Printf("  ⚠ 设置止盈失败: %v", err)
 	}
@@ -754,7 +813,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	}
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	marketData, err := market.Get(decision.Symbol, at.config.ShortTimeframe, at.config.LongTimeframe)
 	if err != nil {
 		return err
 	}
@@ -808,10 +867,34 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// 设置止损止盈
-	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ 设置止损失败: %v", err)
+	// 计算初始止损（20% 初始止损 + LLM 提供止损，谁更保守谁生效）
+	entryPrice := marketData.CurrentPrice
+	slFromLLM := decision.StopLoss
+	var sl20 float64
+	if at.config.InitialStopLossPct > 0 {
+		sl20 = entryPrice * (1 + at.config.InitialStopLossPct)
 	}
+	currentSL, _ := at.getStopLossFromCache(decision.Symbol, "short")
+	newStop := at.computeStopLossPriority("SHORT", entryPrice, currentSL, sl20, slFromLLM, 0)
+
+	// 设置止损（优先使用优先级计算结果，其次兜底使用 LLM 止损）
+	if newStop > 0 {
+		if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, newStop); err != nil {
+			log.Printf("  ⚠ 设置止损失败: %v", err)
+		} else {
+			at.setStopLossCache(decision.Symbol, "short", newStop)
+		}
+	} else if slFromLLM > 0 {
+		if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, slFromLLM); err != nil {
+			log.Printf("  ⚠ 设置止损失败: %v", err)
+		} else {
+			at.setStopLossCache(decision.Symbol, "short", slFromLLM)
+		}
+	} else {
+		log.Printf("  ⚠ 未能为 %s 设置初始止损（计算结果无效且 AI 未提供止损），建议检查配置", decision.Symbol)
+	}
+
+	// 设置止盈仍由 AI 提供
 	if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
 		log.Printf("  ⚠ 设置止盈失败: %v", err)
 	}
@@ -824,7 +907,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 	log.Printf("  🔄 平多仓: %s", decision.Symbol)
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	marketData, err := market.Get(decision.Symbol, at.config.ShortTimeframe, at.config.LongTimeframe)
 	if err != nil {
 		return err
 	}
@@ -850,7 +933,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	log.Printf("  🔄 平空仓: %s", decision.Symbol)
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	marketData, err := market.Get(decision.Symbol, at.config.ShortTimeframe, at.config.LongTimeframe)
 	if err != nil {
 		return err
 	}
@@ -876,7 +959,7 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 	log.Printf("  🎯 调整止损: %s → %.2f", decision.Symbol, decision.NewStopLoss)
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	marketData, err := market.Get(decision.Symbol, at.config.ShortTimeframe, at.config.LongTimeframe)
 	if err != nil {
 		return err
 	}
@@ -907,8 +990,9 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 	side, _ := targetPosition["side"].(string)
 	positionSide := strings.ToUpper(side)
 	positionAmt, _ := targetPosition["positionAmt"].(float64)
+	entryPrice, _ := targetPosition["entryPrice"].(float64)
 
-	// 验证新止损价格合理性
+	// 验证新止损价格合理性（基于 AI 提供数值做基础校验）
 	if positionSide == "LONG" && decision.NewStopLoss >= marketData.CurrentPrice {
 		return fmt.Errorf("多单止损必须低于当前价格 (当前: %.2f, 新止损: %.2f)", marketData.CurrentPrice, decision.NewStopLoss)
 	}
@@ -944,14 +1028,30 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 		// 不中断执行，继续设置新止损
 	}
 
+	// 结合当前止损、初始 20%% 止损和 LLM 新止损，计算更保守的新止损
+	currentSL, _ := at.getStopLossFromCache(decision.Symbol, side)
+	var sl20 float64
+	if at.config.InitialStopLossPct > 0 {
+		if positionSide == "LONG" {
+			sl20 = entryPrice * (1 - at.config.InitialStopLossPct)
+		} else {
+			sl20 = entryPrice * (1 + at.config.InitialStopLossPct)
+		}
+	}
+	newStop := at.computeStopLossPriority(positionSide, marketData.CurrentPrice, currentSL, sl20, decision.NewStopLoss, 0)
+	if newStop <= 0 {
+		newStop = decision.NewStopLoss
+	}
+
 	// 调用交易所 API 修改止损
 	quantity := math.Abs(positionAmt)
-	err = at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.NewStopLoss)
+	err = at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, newStop)
 	if err != nil {
 		return fmt.Errorf("修改止损失败: %w", err)
 	}
 
-	log.Printf("  ✓ 止损已调整: %.2f (当前价格: %.2f)", decision.NewStopLoss, marketData.CurrentPrice)
+	at.setStopLossCache(decision.Symbol, side, newStop)
+	log.Printf("  ✓ 止损已调整: %.2f (当前价格: %.2f)", newStop, marketData.CurrentPrice)
 	return nil
 }
 
@@ -960,7 +1060,7 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 	log.Printf("  🎯 调整止盈: %s → %.2f", decision.Symbol, decision.NewTakeProfit)
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	marketData, err := market.Get(decision.Symbol, at.config.ShortTimeframe, at.config.LongTimeframe)
 	if err != nil {
 		return err
 	}
@@ -1049,7 +1149,7 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 	}
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	marketData, err := market.Get(decision.Symbol, at.config.ShortTimeframe, at.config.LongTimeframe)
 	if err != nil {
 		return err
 	}
@@ -1650,4 +1750,267 @@ func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
 
 	posKey := symbol + "_" + side
 	delete(at.peakPnLCache, posKey)
+}
+
+// getStopLossFromCache 从缓存获取当前止损
+func (at *AutoTrader) getStopLossFromCache(symbol, side string) (float64, bool) {
+	key := symbol + "_" + strings.ToLower(side)
+	at.stopLossCacheMutex.RLock()
+	defer at.stopLossCacheMutex.RUnlock()
+
+	sl, ok := at.stopLossCache[key]
+	return sl, ok
+}
+
+// setStopLossCache 更新止损缓存
+func (at *AutoTrader) setStopLossCache(symbol, side string, stopLoss float64) {
+	key := symbol + "_" + strings.ToLower(side)
+	at.stopLossCacheMutex.Lock()
+	defer at.stopLossCacheMutex.Unlock()
+
+	at.stopLossCache[key] = stopLoss
+}
+
+// computeStopLossPriority 统一计算多来源止损的优先级（谁更保守谁生效，且只收紧不放松）
+func (at *AutoTrader) computeStopLossPriority(side string, currentPrice, currentSL, sl20, slLLM, slChand float64) float64 {
+	sideUpper := strings.ToUpper(side)
+	candidates := []float64{}
+
+	switch sideUpper {
+	case "LONG":
+		add := func(v float64) {
+			if v > 0 && v < currentPrice {
+				candidates = append(candidates, v)
+			}
+		}
+		add(currentSL)
+		add(sl20)
+		add(slLLM)
+		add(slChand)
+		if len(candidates) == 0 {
+			return 0
+		}
+		// LONG：越接近当前价（但在下方）越保守 → 取最大值
+		best := candidates[0]
+		for _, v := range candidates[1:] {
+			if v > best {
+				best = v
+			}
+		}
+		// 安全保护：避免止损高于当前价格
+		if best >= currentPrice {
+			best = currentPrice * 0.999
+		}
+		return best
+
+	case "SHORT":
+		add := func(v float64) {
+			if v > currentPrice {
+				candidates = append(candidates, v)
+			}
+		}
+		add(currentSL)
+		add(sl20)
+		add(slLLM)
+		add(slChand)
+		if len(candidates) == 0 {
+			return 0
+		}
+		// SHORT：越接近当前价（但在上方）越保守 → 取最小值
+		best := candidates[0]
+		for _, v := range candidates[1:] {
+			if v < best {
+				best = v
+			}
+		}
+		// 安全保护：避免止损跌到当前价格以下
+		if best <= currentPrice {
+			best = currentPrice * 1.001
+		}
+		return best
+
+	default:
+		return 0
+	}
+}
+
+// startChandelierStopManager 启动吊灯止损管理（秒级刷新）
+func (at *AutoTrader) startChandelierStopManager() {
+	at.monitorWg.Add(1)
+	go func() {
+		defer at.monitorWg.Done()
+
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		log.Println("📊 启动吊灯止损管理（每秒检查一次）")
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := at.updateChandelierStops(); err != nil {
+					log.Printf("⚠️ 吊灯止损更新失败: %v", err)
+				}
+			case <-at.stopMonitorCh:
+				log.Println("⏹ 停止吊灯止损管理")
+				return
+			}
+		}
+	}()
+}
+
+// updateChandelierStops 基于 ATR 和最高/最低价动态收紧止损
+func (at *AutoTrader) updateChandelierStops() error {
+	// WSMonitor 未初始化时跳过
+	if market.WSMonitorCli == nil {
+		return nil
+	}
+
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓失败: %w", err)
+	}
+
+	for _, pos := range positions {
+		symbol, _ := pos["symbol"].(string)
+		_side, _ := pos["side"].(string) // "long" / "short"
+		posAmt, _ := pos["positionAmt"].(float64)
+		entryPrice, _ := pos["entryPrice"].(float64)
+		markPrice, _ := pos["markPrice"].(float64)
+		if posAmt == 0 || entryPrice <= 0 || markPrice <= 0 {
+			continue
+		}
+
+		// 只针对有方向的持仓
+		if _side != "long" && _side != "short" {
+			continue
+		}
+
+		// 获取该持仓以来的短周期 K 线
+		klines, err := market.WSMonitorCli.GetCurrentKlines(symbol, at.config.ShortTimeframe)
+		if err != nil || len(klines) == 0 {
+			continue
+		}
+
+		posKey := symbol + "_" + _side
+		firstSeen, ok := at.positionFirstSeenTime[posKey]
+		var relevant []market.Kline
+		if ok {
+			for _, k := range klines {
+				if k.OpenTime >= firstSeen {
+					relevant = append(relevant, k)
+				}
+			}
+		}
+		if len(relevant) == 0 {
+			relevant = klines
+		}
+
+		if len(relevant) < 2 {
+			continue
+		}
+
+		// 计算最高价/最低价和 ATR
+		highestHigh := relevant[0].High
+		lowestLow := relevant[0].Low
+		for _, k := range relevant[1:] {
+			if k.High > highestHigh {
+				highestHigh = k.High
+			}
+			if k.Low < lowestLow {
+				lowestLow = k.Low
+			}
+		}
+
+		atr := calculateATRFromKlines(relevant, 14)
+		if atr <= 0 {
+			continue
+		}
+
+		// 吊灯止损价格
+		var slChand float64
+		if _side == "long" {
+			slChand = highestHigh - at.config.ChandelierAtrMult*atr
+		} else {
+			slChand = lowestLow + at.config.ChandelierAtrMult*atr
+		}
+		if slChand <= 0 {
+			continue
+		}
+
+		// 当前止损 + 初始 20%% 止损
+		currentSL, _ := at.getStopLossFromCache(symbol, _side)
+		var sl20 float64
+		if at.config.InitialStopLossPct > 0 {
+			if _side == "long" {
+				sl20 = entryPrice * (1 - at.config.InitialStopLossPct)
+			} else {
+				sl20 = entryPrice * (1 + at.config.InitialStopLossPct)
+			}
+		}
+
+		positionSide := strings.ToUpper(_side)
+		newStop := at.computeStopLossPriority(positionSide, markPrice, currentSL, sl20, 0, slChand)
+		if newStop <= 0 {
+			continue
+		}
+
+		// 如果变化很小，则不更新，避免频繁下单
+		if currentSL > 0 {
+			diff := math.Abs(newStop - currentSL)
+			if markPrice > 0 && diff/markPrice < 0.0005 { // 小于 0.05%% 的变化忽略
+				continue
+			}
+		}
+
+		// 更新交易所止损单
+		if err := at.trader.CancelStopLossOrders(symbol); err != nil {
+			log.Printf("  ⚠ 吊灯止损: 取消旧止损单失败 %s: %v", symbol, err)
+		}
+
+		quantity := math.Abs(posAmt)
+		if err := at.trader.SetStopLoss(symbol, positionSide, quantity, newStop); err != nil {
+			log.Printf("  ⚠ 吊灯止损: 设置新止损失败 %s: %v", symbol, err)
+			continue
+		}
+
+		at.setStopLossCache(symbol, _side, newStop)
+		log.Printf("  ✓ 吊灯止损更新: %s %s → %.4f (当前价格: %.4f)", symbol, positionSide, newStop, markPrice)
+	}
+
+	return nil
+}
+
+// calculateATRFromKlines 计算 ATR（Wilder 平滑）
+func calculateATRFromKlines(klines []market.Kline, period int) float64 {
+	if len(klines) <= period {
+		return 0
+	}
+
+	trs := make([]float64, len(klines))
+	for i := 1; i < len(klines); i++ {
+		high := klines[i].High
+		low := klines[i].Low
+		prevClose := klines[i-1].Close
+
+		tr1 := high - low
+		tr2 := math.Abs(high - prevClose)
+		tr3 := math.Abs(low - prevClose)
+
+		trs[i] = math.Max(tr1, math.Max(tr2, tr3))
+	}
+
+	// 初始 ATR
+	sum := 0.0
+	for i := 1; i <= period; i++ {
+		sum += trs[i]
+	}
+	atr := sum / float64(period)
+
+	// Wilder 平滑
+	for i := period + 1; i < len(klines); i++ {
+		atr = (atr*float64(period-1) + trs[i]) / float64(period)
+	}
+
+	return atr
 }

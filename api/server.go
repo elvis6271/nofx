@@ -386,6 +386,8 @@ type CreateTraderRequest struct {
 	AIModelID            string  `json:"ai_model_id" binding:"required"`
 	ExchangeID           string  `json:"exchange_id" binding:"required"`
 	InitialBalance       float64 `json:"initial_balance"`
+	InitialStopLossPct   float64 `json:"initial_stop_loss_pct"`
+	ChandelierAtrMult    float64 `json:"chandelier_atr_mult"`
 	ScanIntervalMinutes  int     `json:"scan_interval_minutes"`
 	BTCETHLeverage       int     `json:"btc_eth_leverage"`
 	AltcoinLeverage      int     `json:"altcoin_leverage"`
@@ -396,6 +398,8 @@ type CreateTraderRequest struct {
 	IsCrossMargin        *bool   `json:"is_cross_margin"`        // 指针类型，nil表示使用默认值true
 	UseCoinPool          bool    `json:"use_coin_pool"`
 	UseOITop             bool    `json:"use_oi_top"`
+	ShortTimeframe       string  `json:"short_timeframe"`
+	LongTimeframe        string  `json:"long_timeframe"`
 }
 
 type ModelConfig struct {
@@ -538,6 +542,26 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 		scanIntervalMinutes = 3 // 默认3分钟，且不允许小于3
 	}
 
+	// 设置K线周期默认值
+	shortTimeframe := "5m"
+	if req.ShortTimeframe != "" {
+		shortTimeframe = req.ShortTimeframe
+	}
+	longTimeframe := "1h"
+	if req.LongTimeframe != "" {
+		longTimeframe = req.LongTimeframe
+	}
+
+	// 设置止损相关默认值
+	initialStopLossPct := req.InitialStopLossPct
+	if initialStopLossPct <= 0 {
+		initialStopLossPct = 0.2
+	}
+	chandelierAtrMult := req.ChandelierAtrMult
+	if chandelierAtrMult <= 0 {
+		chandelierAtrMult = 3.0
+	}
+
 	// ✨ 查询交易所实际余额，覆盖用户输入
 	actualBalance := req.InitialBalance // 默认使用用户输入
 	exchanges, err := s.database.GetExchanges(userID)
@@ -633,6 +657,8 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 		AIModelID:            req.AIModelID,
 		ExchangeID:           req.ExchangeID,
 		InitialBalance:       actualBalance, // 使用实际查询的余额
+		InitialStopLossPct:   initialStopLossPct,
+		ChandelierAtrMult:    chandelierAtrMult,
 		BTCETHLeverage:       btcEthLeverage,
 		AltcoinLeverage:      altcoinLeverage,
 		TradingSymbols:       req.TradingSymbols,
@@ -643,6 +669,8 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 		SystemPromptTemplate: systemPromptTemplate,
 		IsCrossMargin:        isCrossMargin,
 		ScanIntervalMinutes:  scanIntervalMinutes,
+		ShortTimeframe:       shortTimeframe,
+		LongTimeframe:        longTimeframe,
 		IsRunning:            false,
 	}
 
@@ -676,6 +704,8 @@ type UpdateTraderRequest struct {
 	AIModelID            string  `json:"ai_model_id" binding:"required"`
 	ExchangeID           string  `json:"exchange_id" binding:"required"`
 	InitialBalance       float64 `json:"initial_balance"`
+	InitialStopLossPct   float64 `json:"initial_stop_loss_pct"`
+	ChandelierAtrMult    float64 `json:"chandelier_atr_mult"`
 	ScanIntervalMinutes  int     `json:"scan_interval_minutes"`
 	BTCETHLeverage       int     `json:"btc_eth_leverage"`
 	AltcoinLeverage      int     `json:"altcoin_leverage"`
@@ -684,6 +714,8 @@ type UpdateTraderRequest struct {
 	OverrideBasePrompt   bool    `json:"override_base_prompt"`
 	SystemPromptTemplate string  `json:"system_prompt_template"`
 	IsCrossMargin        *bool   `json:"is_cross_margin"`
+	ShortTimeframe       string  `json:"short_timeframe"`
+	LongTimeframe        string  `json:"long_timeframe"`
 }
 
 // handleUpdateTrader 更新交易员配置
@@ -747,6 +779,32 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		systemPromptTemplate = existingTrader.SystemPromptTemplate // 如果请求中没有提供，保持原值
 	}
 
+	// 设置K线周期，允许更新
+	shortTimeframe := req.ShortTimeframe
+	if shortTimeframe == "" {
+		shortTimeframe = existingTrader.ShortTimeframe
+	}
+	longTimeframe := req.LongTimeframe
+	if longTimeframe == "" {
+		longTimeframe = existingTrader.LongTimeframe
+	}
+
+	// 设置止损相关参数，允许更新
+	initialStopLossPct := req.InitialStopLossPct
+	if initialStopLossPct <= 0 {
+		initialStopLossPct = existingTrader.InitialStopLossPct
+		if initialStopLossPct <= 0 {
+			initialStopLossPct = 0.2
+		}
+	}
+	chandelierAtrMult := req.ChandelierAtrMult
+	if chandelierAtrMult <= 0 {
+		chandelierAtrMult = existingTrader.ChandelierAtrMult
+		if chandelierAtrMult <= 0 {
+			chandelierAtrMult = 3.0
+		}
+	}
+
 	// 更新交易员配置
 	trader := &config.TraderRecord{
 		ID:                   traderID,
@@ -755,6 +813,8 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		AIModelID:            req.AIModelID,
 		ExchangeID:           req.ExchangeID,
 		InitialBalance:       req.InitialBalance,
+		InitialStopLossPct:   initialStopLossPct,
+		ChandelierAtrMult:    chandelierAtrMult,
 		BTCETHLeverage:       btcEthLeverage,
 		AltcoinLeverage:      altcoinLeverage,
 		TradingSymbols:       req.TradingSymbols,
@@ -763,6 +823,8 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		SystemPromptTemplate: systemPromptTemplate,
 		IsCrossMargin:        isCrossMargin,
 		ScanIntervalMinutes:  scanIntervalMinutes,
+		ShortTimeframe:       shortTimeframe,
+		LongTimeframe:        longTimeframe,
 		IsRunning:            existingTrader.IsRunning, // 保持原值
 	}
 
@@ -1253,6 +1315,8 @@ func (s *Server) handleGetTraderConfig(c *gin.Context) {
 		"ai_model":               aiModelID,
 		"exchange_id":            traderConfig.ExchangeID,
 		"initial_balance":        traderConfig.InitialBalance,
+		"initial_stop_loss_pct":  traderConfig.InitialStopLossPct,
+		"chandelier_atr_mult":    traderConfig.ChandelierAtrMult,
 		"scan_interval_minutes":  traderConfig.ScanIntervalMinutes,
 		"btc_eth_leverage":       traderConfig.BTCETHLeverage,
 		"altcoin_leverage":       traderConfig.AltcoinLeverage,
@@ -1263,6 +1327,8 @@ func (s *Server) handleGetTraderConfig(c *gin.Context) {
 		"is_cross_margin":        traderConfig.IsCrossMargin,
 		"use_coin_pool":          traderConfig.UseCoinPool,
 		"use_oi_top":             traderConfig.UseOITop,
+		"short_timeframe":        traderConfig.ShortTimeframe,
+		"long_timeframe":         traderConfig.LongTimeframe,
 		"is_running":             isRunning,
 	}
 

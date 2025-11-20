@@ -127,6 +127,8 @@ export interface CreateTraderRequest {
   ai_model_id: string
   exchange_id: string
   initial_balance?: number // 可选：创建时由后端自动获取，编辑时可手动更新
+  initial_stop_loss_pct?: number
+  chandelier_atr_mult?: number
   scan_interval_minutes?: number
   btc_eth_leverage?: number
   altcoin_leverage?: number
@@ -137,6 +139,8 @@ export interface CreateTraderRequest {
   is_cross_margin?: boolean
   use_coin_pool?: boolean
   use_oi_top?: boolean
+  short_timeframe?: string // 短周期K线 (如 5m, 15m)
+  long_timeframe?: string // 长周期K线 (如 1h, 4h)
 }
 
 export interface UpdateModelConfigRequest {
@@ -201,7 +205,11 @@ export interface TraderConfigData {
   is_cross_margin: boolean
   use_coin_pool: boolean
   use_oi_top: boolean
+  initial_stop_loss_pct: number
+  chandelier_atr_mult: number
   initial_balance: number
   scan_interval_minutes: number
   is_running: boolean
+  short_timeframe: string // 短周期K线
+  long_timeframe: string // 长周期K线
 }

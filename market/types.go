@@ -15,6 +15,8 @@ type Data struct {
 	FundingRate       float64
 	IntradaySeries    *IntradayData
 	LongerTermContext *LongerTermData
+	ShortTimeframe    string // 短周期K线（例如：5m, 15m）
+	LongTimeframe     string // 长周期K线（例如：1h, 4h）
 }
 
 // OIData Open Interest数据
@@ -25,13 +27,15 @@ type OIData struct {
 
 // IntradayData 日内数据(3分钟间隔)
 type IntradayData struct {
-	MidPrices   []float64
-	EMA20Values []float64
-	MACDValues  []float64
-	RSI7Values  []float64
-	RSI14Values []float64
-	Volume      []float64
-	ATR14       float64
+	MidPrices    []float64
+	EMA20Values  []float64
+	MACDValues   []float64
+	RSI7Values   []float64
+	RSI14Values  []float64
+	RSI20Values  []float64 // RSI(20) for strategy
+	RSI100Values []float64 // RSI(100) for strategy
+	Volume       []float64
+	ATR14        float64
 }
 
 // LongerTermData 长期数据(4小时时间框架)
