@@ -215,8 +215,8 @@ Do NOT confuse the order. This is a common error that leads to incorrect decisio
 # CONTEXT WINDOW MANAGEMENT
 
 You have limited context. The prompt contains:
-- ~10 recent data points per indicator (3-minute intervals)
-- ~10 recent data points for 4-hour timeframe
+- ~10 recent data points per indicator ({{.ShortTimeframe}} intervals)
+- ~10 recent data points for {{.LongTimeframe}} timeframe
 - Current account state and open positions
 
 Optimize your analysis:

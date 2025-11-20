@@ -177,6 +177,14 @@ export function TraderConfigViewModal({
                 value={`${traderData.altcoin_leverage}x`}
               />
               <InfoRow
+                label="初始止损价格比例"
+                value={`${(traderData.initial_stop_loss_pct * 100).toFixed(1)}%`}
+              />
+              <InfoRow
+                label="吊灯止损 ATR 倍数"
+                value={traderData.chandelier_atr_mult.toFixed(2)}
+              />
+              <InfoRow
                 label="交易币种"
                 value={traderData.trading_symbols || '使用默认币种'}
                 copyable

@@ -177,6 +177,8 @@ export function useTraderActions({
         ai_model_id: data.ai_model_id,
         exchange_id: data.exchange_id,
         initial_balance: data.initial_balance,
+        initial_stop_loss_pct: data.initial_stop_loss_pct,
+        chandelier_atr_mult: data.chandelier_atr_mult,
         scan_interval_minutes: data.scan_interval_minutes,
         btc_eth_leverage: data.btc_eth_leverage,
         altcoin_leverage: data.altcoin_leverage,
@@ -187,6 +189,8 @@ export function useTraderActions({
         is_cross_margin: data.is_cross_margin,
         use_coin_pool: data.use_coin_pool,
         use_oi_top: data.use_oi_top,
+        short_timeframe: data.short_timeframe,
+        long_timeframe: data.long_timeframe,
       }
 
       await toast.promise(api.updateTrader(editingTrader.trader_id, request), {

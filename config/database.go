@@ -153,6 +153,8 @@ func (d *Database) createTables() error {
 			ai_model_id TEXT NOT NULL,
 			exchange_id TEXT NOT NULL,
 			initial_balance REAL NOT NULL,
+			initial_stop_loss_pct REAL DEFAULT 0.2,
+			chandelier_atr_mult REAL DEFAULT 3.0,
 			scan_interval_minutes INTEGER DEFAULT 3,
 			is_running BOOLEAN DEFAULT 0,
 			btc_eth_leverage INTEGER DEFAULT 5,
@@ -251,6 +253,8 @@ func (d *Database) createTables() error {
 		`ALTER TABLE traders ADD COLUMN custom_coins TEXT DEFAULT ''`,                  // 自定义币种列表（JSON格式）
 		`ALTER TABLE traders ADD COLUMN btc_eth_leverage INTEGER DEFAULT 5`,            // BTC/ETH杠杆倍数
 		`ALTER TABLE traders ADD COLUMN altcoin_leverage INTEGER DEFAULT 5`,            // 山寨币杠杆倍数
+		`ALTER TABLE traders ADD COLUMN initial_stop_loss_pct REAL DEFAULT 0.2`,        // 初始价格止损百分比
+		`ALTER TABLE traders ADD COLUMN chandelier_atr_mult REAL DEFAULT 3.0`,          // 吊灯止损ATR倍数
 		`ALTER TABLE traders ADD COLUMN trading_symbols TEXT DEFAULT ''`,               // 交易币种，逗号分隔
 		`ALTER TABLE traders ADD COLUMN use_coin_pool BOOLEAN DEFAULT 0`,               // 是否使用COIN POOL信号源
 		`ALTER TABLE traders ADD COLUMN use_oi_top BOOLEAN DEFAULT 0`,                  // 是否使用OI TOP信号源
@@ -479,6 +483,8 @@ type TraderRecord struct {
 	AIModelID            string    `json:"ai_model_id"`
 	ExchangeID           string    `json:"exchange_id"`
 	InitialBalance       float64   `json:"initial_balance"`
+	InitialStopLossPct   float64   `json:"initial_stop_loss_pct"`
+	ChandelierAtrMult    float64   `json:"chandelier_atr_mult"`
 	ScanIntervalMinutes  int       `json:"scan_interval_minutes"`
 	IsRunning            bool      `json:"is_running"`
 	BTCETHLeverage       int       `json:"btc_eth_leverage"`       // BTC/ETH杠杆倍数
@@ -907,22 +913,28 @@ func (d *Database) CreateExchange(userID, id, name, typ string, enabled bool, ap
 // CreateTrader 创建交易员
 func (d *Database) CreateTrader(trader *TraderRecord) error {
 	_, err := d.db.Exec(`
-		INSERT INTO traders (id, user_id, name, ai_model_id, exchange_id, initial_balance, scan_interval_minutes, is_running, btc_eth_leverage, altcoin_leverage, trading_symbols, use_coin_pool, use_oi_top, custom_prompt, override_base_prompt, system_prompt_template, is_cross_margin)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, trader.ID, trader.UserID, trader.Name, trader.AIModelID, trader.ExchangeID, trader.InitialBalance, trader.ScanIntervalMinutes, trader.IsRunning, trader.BTCETHLeverage, trader.AltcoinLeverage, trader.TradingSymbols, trader.UseCoinPool, trader.UseOITop, trader.CustomPrompt, trader.OverrideBasePrompt, trader.SystemPromptTemplate, trader.IsCrossMargin)
+		INSERT INTO traders (id, user_id, name, ai_model_id, exchange_id, initial_balance, initial_stop_loss_pct, chandelier_atr_mult, scan_interval_minutes, is_running, btc_eth_leverage, altcoin_leverage, trading_symbols, use_coin_pool, use_oi_top, custom_prompt, override_base_prompt, system_prompt_template, is_cross_margin, short_timeframe, long_timeframe)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, trader.ID, trader.UserID, trader.Name, trader.AIModelID, trader.ExchangeID, trader.InitialBalance, trader.InitialStopLossPct, trader.ChandelierAtrMult, trader.ScanIntervalMinutes, trader.IsRunning, trader.BTCETHLeverage, trader.AltcoinLeverage, trader.TradingSymbols, trader.UseCoinPool, trader.UseOITop, trader.CustomPrompt, trader.OverrideBasePrompt, trader.SystemPromptTemplate, trader.IsCrossMargin, trader.ShortTimeframe, trader.LongTimeframe)
 	return err
 }
 
 // GetTraders 获取用户的交易员
 func (d *Database) GetTraders(userID string) ([]*TraderRecord, error) {
 	rows, err := d.db.Query(`
-		SELECT id, user_id, name, ai_model_id, exchange_id, initial_balance, scan_interval_minutes, is_running,
+		SELECT id, user_id, name, ai_model_id, exchange_id, initial_balance,
+		       COALESCE(initial_stop_loss_pct, 0.2) as initial_stop_loss_pct,
+		       COALESCE(chandelier_atr_mult, 3.0) as chandelier_atr_mult,
+		       scan_interval_minutes, is_running,
 		       COALESCE(btc_eth_leverage, 5) as btc_eth_leverage, COALESCE(altcoin_leverage, 5) as altcoin_leverage,
 		       COALESCE(trading_symbols, '') as trading_symbols,
 		       COALESCE(use_coin_pool, 0) as use_coin_pool, COALESCE(use_oi_top, 0) as use_oi_top,
 		       COALESCE(custom_prompt, '') as custom_prompt, COALESCE(override_base_prompt, 0) as override_base_prompt,
 		       COALESCE(system_prompt_template, 'default') as system_prompt_template,
-		       COALESCE(is_cross_margin, 1) as is_cross_margin, created_at, updated_at
+		       COALESCE(is_cross_margin, 1) as is_cross_margin,
+		       COALESCE(short_timeframe, '5m') as short_timeframe,
+		       COALESCE(long_timeframe, '1h') as long_timeframe,
+		       created_at, updated_at
 		FROM traders WHERE user_id = ? ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
@@ -935,11 +947,12 @@ func (d *Database) GetTraders(userID string) ([]*TraderRecord, error) {
 		var trader TraderRecord
 		err := rows.Scan(
 			&trader.ID, &trader.UserID, &trader.Name, &trader.AIModelID, &trader.ExchangeID,
-			&trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
+			&trader.InitialBalance, &trader.InitialStopLossPct, &trader.ChandelierAtrMult, &trader.ScanIntervalMinutes, &trader.IsRunning,
 			&trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
 			&trader.UseCoinPool, &trader.UseOITop,
 			&trader.CustomPrompt, &trader.OverrideBasePrompt, &trader.SystemPromptTemplate,
 			&trader.IsCrossMargin,
+			&trader.ShortTimeframe, &trader.LongTimeframe,
 			&trader.CreatedAt, &trader.UpdatedAt,
 		)
 		if err != nil {
@@ -963,13 +976,20 @@ func (d *Database) UpdateTrader(trader *TraderRecord) error {
 		UPDATE traders SET
 			name = ?, ai_model_id = ?, exchange_id = ?,
 			scan_interval_minutes = ?, btc_eth_leverage = ?, altcoin_leverage = ?,
+			initial_stop_loss_pct = ?,
+			chandelier_atr_mult = ?,
 			trading_symbols = ?, custom_prompt = ?, override_base_prompt = ?,
-			system_prompt_template = ?, is_cross_margin = ?, updated_at = CURRENT_TIMESTAMP
+			system_prompt_template = ?, is_cross_margin = ?, 
+			short_timeframe = ?, long_timeframe = ?,
+			updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND user_id = ?
 	`, trader.Name, trader.AIModelID, trader.ExchangeID,
 		trader.ScanIntervalMinutes, trader.BTCETHLeverage, trader.AltcoinLeverage,
+		trader.InitialStopLossPct, trader.ChandelierAtrMult,
 		trader.TradingSymbols, trader.CustomPrompt, trader.OverrideBasePrompt,
-		trader.SystemPromptTemplate, trader.IsCrossMargin, trader.ID, trader.UserID)
+		trader.SystemPromptTemplate, trader.IsCrossMargin,
+		trader.ShortTimeframe, trader.LongTimeframe,
+		trader.ID, trader.UserID)
 	return err
 }
 
@@ -1000,7 +1020,10 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 
 	err := d.db.QueryRow(`
 		SELECT
-			t.id, t.user_id, t.name, t.ai_model_id, t.exchange_id, t.initial_balance, t.scan_interval_minutes, t.is_running,
+			t.id, t.user_id, t.name, t.ai_model_id, t.exchange_id, t.initial_balance,
+			COALESCE(t.initial_stop_loss_pct, 0.2) as initial_stop_loss_pct,
+			COALESCE(t.chandelier_atr_mult, 3.0) as chandelier_atr_mult,
+			t.scan_interval_minutes, t.is_running,
 			COALESCE(t.btc_eth_leverage, 5) as btc_eth_leverage,
 			COALESCE(t.altcoin_leverage, 5) as altcoin_leverage,
 			COALESCE(t.trading_symbols, '') as trading_symbols,
@@ -1010,6 +1033,8 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 			COALESCE(t.override_base_prompt, 0) as override_base_prompt,
 			COALESCE(t.system_prompt_template, 'default') as system_prompt_template,
 			COALESCE(t.is_cross_margin, 1) as is_cross_margin,
+			COALESCE(t.short_timeframe, '5m') as short_timeframe,
+			COALESCE(t.long_timeframe, '1h') as long_timeframe,
 			t.created_at, t.updated_at,
 			a.id, a.user_id, a.name, a.provider, a.enabled, a.api_key,
 			COALESCE(a.custom_api_url, '') as custom_api_url,
@@ -1027,11 +1052,12 @@ func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIM
 		WHERE t.id = ? AND t.user_id = ?
 	`, traderID, userID).Scan(
 		&trader.ID, &trader.UserID, &trader.Name, &trader.AIModelID, &trader.ExchangeID,
-		&trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
+		&trader.InitialBalance, &trader.InitialStopLossPct, &trader.ChandelierAtrMult, &trader.ScanIntervalMinutes, &trader.IsRunning,
 		&trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
 		&trader.UseCoinPool, &trader.UseOITop,
 		&trader.CustomPrompt, &trader.OverrideBasePrompt, &trader.SystemPromptTemplate,
 		&trader.IsCrossMargin,
+		&trader.ShortTimeframe, &trader.LongTimeframe,
 		&trader.CreatedAt, &trader.UpdatedAt,
 		&aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
 		&aiModel.CustomAPIURL, &aiModel.CustomModelName,

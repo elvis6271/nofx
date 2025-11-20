@@ -85,6 +85,8 @@ type Context struct {
 	Performance     interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
 	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
 	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+	ShortTimeframe  string                  `json:"-"` // 短周期K线（如："5m", "15m"）
+	LongTimeframe   string                  `json:"-"` // 长周期K线（如："1h", "4h"）
 }
 
 // Decision AI的交易决策
@@ -133,7 +135,7 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient mcp.AIClient, custo
 	}
 
 	// 2. 构建 System Prompt（固定规则）和 User Prompt（动态数据）
-	systemPrompt := buildSystemPromptWithCustom(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, customPrompt, overrideBase, templateName)
+	systemPrompt := buildSystemPromptWithCustom(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.ShortTimeframe, ctx.LongTimeframe, customPrompt, overrideBase, templateName)
 	userPrompt := buildUserPrompt(ctx)
 
 	// 3. 调用AI API（使用 system + user prompt）
@@ -195,7 +197,7 @@ func fetchMarketDataForContext(ctx *Context) error {
 	}
 
 	for symbol := range symbolSet {
-		data, err := market.Get(symbol)
+		data, err := market.Get(symbol, ctx.ShortTimeframe, ctx.LongTimeframe)
 		if err != nil {
 			// 单个币种失败不影响整体，只记录错误
 			continue
@@ -272,14 +274,14 @@ func calculateMaxCandidates(ctx *Context) int {
 }
 
 // buildSystemPromptWithCustom 构建包含自定义内容的 System Prompt
-func buildSystemPromptWithCustom(accountEquity float64, btcEthLeverage, altcoinLeverage int, customPrompt string, overrideBase bool, templateName string) string {
+func buildSystemPromptWithCustom(accountEquity float64, btcEthLeverage, altcoinLeverage int, shortTF, longTF string, customPrompt string, overrideBase bool, templateName string) string {
 	// 如果覆盖基础prompt且有自定义prompt，只使用自定义prompt
 	if overrideBase && customPrompt != "" {
 		return customPrompt
 	}
 
 	// 获取基础prompt（使用指定的模板）
-	basePrompt := buildSystemPrompt(accountEquity, btcEthLeverage, altcoinLeverage, templateName)
+	basePrompt := buildSystemPrompt(accountEquity, btcEthLeverage, altcoinLeverage, shortTF, longTF, templateName)
 
 	// 如果没有自定义prompt，直接返回基础prompt
 	if customPrompt == "" {
@@ -299,7 +301,7 @@ func buildSystemPromptWithCustom(accountEquity float64, btcEthLeverage, altcoinL
 }
 
 // buildSystemPrompt 构建 System Prompt（使用模板+动态部分）
-func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int, templateName string) string {
+func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int, shortTF, longTF string, templateName string) string {
 	var sb strings.Builder
 
 	// 1. 加载提示词模板（核心交易策略部分）
@@ -308,6 +310,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	}
 
 	template, err := GetPromptTemplate(templateName)
+	var templateContent string
 	if err != nil {
 		// 如果模板不存在，记录错误并使用 default
 		log.Printf("⚠️  提示词模板 '%s' 不存在，使用 default: %v", templateName, err)
@@ -315,15 +318,29 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 		if err != nil {
 			// 如果连 default 都不存在，使用内置的简化版本
 			log.Printf("❌ 无法加载任何提示词模板，使用内置简化版本")
-			sb.WriteString("你是专业的加密货币交易AI。请根据市场数据做出交易决策。\n\n")
+			templateContent = "你是专业的加密货币交易AI。请根据市场数据做出交易决策。\n\n"
 		} else {
-			sb.WriteString(template.Content)
-			sb.WriteString("\n\n")
+			templateContent = template.Content
 		}
 	} else {
-		sb.WriteString(template.Content)
-		sb.WriteString("\n\n")
+		templateContent = template.Content
 	}
+
+	// 替换模板中的时间周期占位符
+	// 如果未设置时间周期，使用默认值
+	if shortTF == "" {
+		shortTF = "3m"
+	}
+	if longTF == "" {
+		longTF = "4h"
+	}
+	
+	// 替换 {{.ShortTimeframe}} 和 {{.LongTimeframe}}
+	templateContent = strings.ReplaceAll(templateContent, "{{.ShortTimeframe}}", shortTF)
+	templateContent = strings.ReplaceAll(templateContent, "{{.LongTimeframe}}", longTF)
+	
+	sb.WriteString(templateContent)
+	sb.WriteString("\n\n")
 
 	// 2. 硬约束（风险控制）- 动态生成
 	sb.WriteString("# 硬约束（风险控制）\n\n")

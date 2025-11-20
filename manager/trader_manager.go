@@ -230,6 +230,8 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		CustomModelName:       aiModelCfg.CustomModelName, // 自定义模型名称
 		ScanInterval:          time.Duration(traderCfg.ScanIntervalMinutes) * time.Minute,
 		InitialBalance:        traderCfg.InitialBalance,
+		InitialStopLossPct:   traderCfg.InitialStopLossPct,
+		ChandelierAtrMult:    traderCfg.ChandelierAtrMult,
 		BTCETHLeverage:        traderCfg.BTCETHLeverage,
 		AltcoinLeverage:       traderCfg.AltcoinLeverage,
 		MaxDailyLoss:          maxDailyLoss,
@@ -238,6 +240,8 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		IsCrossMargin:         traderCfg.IsCrossMargin,
 		DefaultCoins:          defaultCoins,
 		TradingCoins:          tradingCoins,
+		ShortTimeframe:        traderCfg.ShortTimeframe,
+		LongTimeframe:         traderCfg.LongTimeframe,
 		SystemPromptTemplate:  traderCfg.SystemPromptTemplate, // 系统提示词模板
 	}
 
@@ -345,6 +349,8 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		IsCrossMargin:         traderCfg.IsCrossMargin,
 		DefaultCoins:          defaultCoins,
 		TradingCoins:          tradingCoins,
+		ShortTimeframe:        traderCfg.ShortTimeframe,
+		LongTimeframe:         traderCfg.LongTimeframe,
 	}
 
 	// 根据交易所类型设置API密钥
@@ -1031,6 +1037,8 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 		AIModel:              aiModelCfg.Provider, // 使用provider作为模型标识
 		Exchange:             exchangeCfg.ID,      // 使用exchange ID
 		InitialBalance:       traderCfg.InitialBalance,
+		InitialStopLossPct:   traderCfg.InitialStopLossPct,
+		ChandelierAtrMult:    traderCfg.ChandelierAtrMult,
 		BTCETHLeverage:       traderCfg.BTCETHLeverage,
 		AltcoinLeverage:      traderCfg.AltcoinLeverage,
 		ScanInterval:         time.Duration(traderCfg.ScanIntervalMinutes) * time.Minute,
