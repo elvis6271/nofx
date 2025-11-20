@@ -5,7 +5,7 @@
     "btc_eth_leverage": 5,
     "altcoin_leverage": 5
   },
-  "use_default_coins": true,
+  "use_default_coins": false,
   "default_coins": [
     "BTCUSDT",
     "ETHUSDT",
@@ -16,6 +16,8 @@
     "ADAUSDT",
     "HYPEUSDT"
   ],
+  "ai500_api_url": "http://host.docker.internal:5001/api/ai500",
+  "oi_top_api_url": "http://host.docker.internal:5001/api/oi-top",
   "api_server_port": 8080,
   "max_daily_loss": 10.0,
   "max_drawdown": 20.0,
