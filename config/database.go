@@ -255,6 +255,9 @@ func (d *Database) createTables() error {
 		`ALTER TABLE traders ADD COLUMN use_coin_pool BOOLEAN DEFAULT 0`,               // 是否使用COIN POOL信号源
 		`ALTER TABLE traders ADD COLUMN use_oi_top BOOLEAN DEFAULT 0`,                  // 是否使用OI TOP信号源
 		`ALTER TABLE traders ADD COLUMN system_prompt_template TEXT DEFAULT 'default'`, // 系统提示词模板名称
+		`ALTER TABLE traders ADD COLUMN short_timeframe TEXT DEFAULT '5m'`,             // 短周期K线（默认5分钟）
+		`ALTER TABLE traders ADD COLUMN long_timeframe TEXT DEFAULT '1h'`,              // 长周期K线（默认1小时）
+		`ALTER TABLE traders ADD COLUMN decision_interval_minutes INTEGER DEFAULT 5`,   // 决策间隔（分钟，默认5分钟）
 		`ALTER TABLE ai_models ADD COLUMN custom_api_url TEXT DEFAULT ''`,              // 自定义API地址
 		`ALTER TABLE ai_models ADD COLUMN custom_model_name TEXT DEFAULT ''`,           // 自定义模型名称
 	}
@@ -487,6 +490,9 @@ type TraderRecord struct {
 	OverrideBasePrompt   bool      `json:"override_base_prompt"`   // 是否覆盖基础prompt
 	SystemPromptTemplate string    `json:"system_prompt_template"` // 系统提示词模板名称
 	IsCrossMargin        bool      `json:"is_cross_margin"`        // 是否为全仓模式（true=全仓，false=逐仓）
+	ShortTimeframe       string    `json:"short_timeframe"`        // 短周期K线（如5m, 15m）
+	LongTimeframe        string    `json:"long_timeframe"`         // 长周期K线（如1h, 4h）
+	DecisionIntervalMin  int       `json:"decision_interval_minutes"` // 决策间隔（分钟）
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }
