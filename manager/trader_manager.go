@@ -70,6 +70,7 @@ func (tm *TraderManager) LoadTradersFromDatabase(database *config.Database) erro
 	maxDrawdownStr, _ := database.GetSystemConfig("max_drawdown")
 	stopTradingMinutesStr, _ := database.GetSystemConfig("stop_trading_minutes")
 	defaultCoinsStr, _ := database.GetSystemConfig("default_coins")
+	useDefaultCoinsStr, _ := database.GetSystemConfig("use_default_coins")
 
 	// 解析配置
 	maxDailyLoss := 10.0 // 默认值
@@ -95,6 +96,7 @@ func (tm *TraderManager) LoadTradersFromDatabase(database *config.Database) erro
 			defaultCoins = []string{}
 		}
 	}
+	useDefaultCoins := useDefaultCoinsStr == "true"
 
 	// 为每个交易员获取AI模型和交易所配置
 	for _, traderCfg := range allTraders {
@@ -170,7 +172,7 @@ func (tm *TraderManager) LoadTradersFromDatabase(database *config.Database) erro
 		}
 
 		// 添加到TraderManager
-		err = tm.addTraderFromDB(traderCfg, aiModelCfg, exchangeCfg, coinPoolURL, oiTopURL, maxDailyLoss, maxDrawdown, stopTradingMinutes, defaultCoins, database, traderCfg.UserID)
+		err = tm.addTraderFromDB(traderCfg, aiModelCfg, exchangeCfg, coinPoolURL, oiTopURL, maxDailyLoss, maxDrawdown, stopTradingMinutes, defaultCoins, useDefaultCoins, database, traderCfg.UserID)
 		if err != nil {
 			log.Printf("❌ 添加交易员 %s 失败: %v", traderCfg.Name, err)
 			continue
@@ -182,7 +184,7 @@ func (tm *TraderManager) LoadTradersFromDatabase(database *config.Database) erro
 }
 
 // addTraderFromConfig 内部方法：从配置添加交易员（不加锁，因为调用方已加锁）
-func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModelCfg *config.AIModelConfig, exchangeCfg *config.ExchangeConfig, coinPoolURL, oiTopURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, defaultCoins []string, database *config.Database, userID string) error {
+func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModelCfg *config.AIModelConfig, exchangeCfg *config.ExchangeConfig, coinPoolURL, oiTopURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, defaultCoins []string, useDefaultCoins bool, database *config.Database, userID string) error {
 	if _, exists := tm.traders[traderCfg.ID]; exists {
 		return fmt.Errorf("trader ID '%s' 已存在", traderCfg.ID)
 	}
@@ -200,8 +202,8 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		}
 	}
 
-	// 如果没有指定交易币种，使用默认币种
-	if len(tradingCoins) == 0 {
+	// 如果没有指定交易币种，是否回退到系统默认币种由 useDefaultCoins 决定
+	if len(tradingCoins) == 0 && useDefaultCoins {
 		tradingCoins = defaultCoins
 	}
 
@@ -240,6 +242,9 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		IsCrossMargin:         traderCfg.IsCrossMargin,
 		DefaultCoins:          defaultCoins,
 		TradingCoins:          tradingCoins,
+		UseDefaultCoins:       useDefaultCoins,
+		UseCoinPool:           traderCfg.UseCoinPool,
+		UseOITop:              traderCfg.UseOITop,
 		ShortTimeframe:        traderCfg.ShortTimeframe,
 		LongTimeframe:         traderCfg.LongTimeframe,
 		SystemPromptTemplate:  traderCfg.SystemPromptTemplate, // 系统提示词模板
@@ -290,7 +295,7 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 // AddTrader 从数据库配置添加trader (移除旧版兼容性)
 
 // AddTraderFromDB 从数据库配置添加trader
-func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModelCfg *config.AIModelConfig, exchangeCfg *config.ExchangeConfig, coinPoolURL, oiTopURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, defaultCoins []string, database *config.Database, userID string) error {
+func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModelCfg *config.AIModelConfig, exchangeCfg *config.ExchangeConfig, coinPoolURL, oiTopURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, defaultCoins []string, useDefaultCoins bool, database *config.Database, userID string) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -311,8 +316,8 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		}
 	}
 
-	// 如果没有指定交易币种，使用默认币种
-	if len(tradingCoins) == 0 {
+	// 如果没有指定交易币种，是否回退到系统默认币种由 useDefaultCoins 决定
+	if len(tradingCoins) == 0 && useDefaultCoins {
 		tradingCoins = defaultCoins
 	}
 
@@ -349,6 +354,9 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		IsCrossMargin:         traderCfg.IsCrossMargin,
 		DefaultCoins:          defaultCoins,
 		TradingCoins:          tradingCoins,
+		UseDefaultCoins:       useDefaultCoins,
+		UseCoinPool:           traderCfg.UseCoinPool,
+		UseOITop:              traderCfg.UseOITop,
 		ShortTimeframe:        traderCfg.ShortTimeframe,
 		LongTimeframe:         traderCfg.LongTimeframe,
 	}
@@ -844,7 +852,7 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 		}
 
 		// 使用现有的方法加载交易员
-		err = tm.loadSingleTrader(traderCfg, aiModelCfg, exchangeCfg, coinPoolURL, oiTopURL, maxDailyLoss, maxDrawdown, stopTradingMinutes, defaultCoins, database, userID)
+		err = tm.loadSingleTrader(traderCfg, aiModelCfg, exchangeCfg, coinPoolURL, oiTopURL, maxDailyLoss, maxDrawdown, stopTradingMinutes, defaultCoins, useDefaultCoins, database, userID)
 		if err != nil {
 			log.Printf("⚠️ 加载交易员 %s 失败: %v", traderCfg.Name, err)
 		}
@@ -950,6 +958,7 @@ func (tm *TraderManager) LoadTraderByID(database *config.Database, userID, trade
 	maxDrawdownStr, _ := database.GetSystemConfig("max_drawdown")
 	stopTradingMinutesStr, _ := database.GetSystemConfig("stop_trading_minutes")
 	defaultCoinsStr, _ := database.GetSystemConfig("default_coins")
+	useDefaultCoinsStr, _ := database.GetSystemConfig("use_default_coins")
 
 	// 6. 查询用户信号源配置
 	var coinPoolURL, oiTopURL string
@@ -988,6 +997,7 @@ func (tm *TraderManager) LoadTraderByID(database *config.Database, userID, trade
 
 	// 8. 调用私有方法加载交易员
 	log.Printf("📋 加载单个交易员: %s (%s)", traderCfg.Name, traderID)
+	useDefaultCoins := useDefaultCoinsStr == "true"
 	return tm.loadSingleTrader(
 		traderCfg,
 		aiModelCfg,
@@ -998,13 +1008,14 @@ func (tm *TraderManager) LoadTraderByID(database *config.Database, userID, trade
 		maxDrawdown,
 		stopTradingMinutes,
 		defaultCoins,
+		useDefaultCoins,
 		database,
 		userID,
 	)
 }
 
 // loadSingleTrader 加载单个交易员（从现有代码提取的公共逻辑）
-func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiModelCfg *config.AIModelConfig, exchangeCfg *config.ExchangeConfig, coinPoolURL, oiTopURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, defaultCoins []string, database *config.Database, userID string) error {
+func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiModelCfg *config.AIModelConfig, exchangeCfg *config.ExchangeConfig, coinPoolURL, oiTopURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, defaultCoins []string, useDefaultCoins bool, database *config.Database, userID string) error {
 	// 处理交易币种列表
 	var tradingCoins []string
 	if traderCfg.TradingSymbols != "" {
@@ -1018,8 +1029,8 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 		}
 	}
 
-	// 如果没有指定交易币种，使用默认币种
-	if len(tradingCoins) == 0 {
+	// 如果没有指定交易币种，是否回退到系统默认币种由 useDefaultCoins 决定
+	if len(tradingCoins) == 0 && useDefaultCoins {
 		tradingCoins = defaultCoins
 	}
 
@@ -1052,6 +1063,9 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 		IsCrossMargin:        traderCfg.IsCrossMargin,
 		DefaultCoins:         defaultCoins,
 		TradingCoins:         tradingCoins,
+		UseDefaultCoins:      useDefaultCoins,
+		UseCoinPool:          traderCfg.UseCoinPool,
+		UseOITop:             traderCfg.UseOITop,
 		SystemPromptTemplate: traderCfg.SystemPromptTemplate, // 系统提示词模板
 		HyperliquidTestnet:   exchangeCfg.Testnet,            // Hyperliquid测试网
 	}

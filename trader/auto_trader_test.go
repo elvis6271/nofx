@@ -333,6 +333,7 @@ func (s *AutoTraderTestSuite) TestGetCandidateCoins() {
 	s.Run("使用数据库默认币种", func() {
 		s.autoTrader.defaultCoins = []string{"BTC", "ETH", "BNB"}
 		s.autoTrader.tradingCoins = []string{} // 空的自定义币种
+		s.autoTrader.useDefaultCoins = true
 
 		coins, err := s.autoTrader.getCandidateCoins()
 
@@ -346,6 +347,7 @@ func (s *AutoTraderTestSuite) TestGetCandidateCoins() {
 
 	s.Run("使用自定义币种", func() {
 		s.autoTrader.tradingCoins = []string{"SOL", "AVAX"}
+		s.autoTrader.useDefaultCoins = true
 
 		coins, err := s.autoTrader.getCandidateCoins()
 
@@ -356,9 +358,10 @@ func (s *AutoTraderTestSuite) TestGetCandidateCoins() {
 		s.Contains(coins[0].Sources, "custom")
 	})
 
-	s.Run("使用AI500+OI作为fallback", func() {
+	s.Run("使用AI500+OI作为fallback (无默认币种)", func() {
 		s.autoTrader.defaultCoins = []string{} // 空的默认币种
 		s.autoTrader.tradingCoins = []string{} // 空的自定义币种
+		s.autoTrader.useDefaultCoins = false
 
 		// Mock pool.GetMergedCoinPool
 		s.patches.ApplyFunc(pool.GetMergedCoinPool, func(ai500Limit int) (*pool.MergedCoinPool, error) {
@@ -375,6 +378,30 @@ func (s *AutoTraderTestSuite) TestGetCandidateCoins() {
 
 		s.NoError(err)
 		s.Equal(2, len(coins))
+	})
+
+	s.Run("use_default_coins=false 且启用信号源时优先使用合并池", func() {
+		s.autoTrader.defaultCoins = []string{"BTC", "ETH"}
+		s.autoTrader.tradingCoins = []string{}
+		s.autoTrader.useDefaultCoins = false
+		s.autoTrader.useCoinPool = true
+
+		// Mock 合并池
+		s.patches.ApplyFunc(pool.GetMergedCoinPool, func(ai500Limit int) (*pool.MergedCoinPool, error) {
+			return &pool.MergedCoinPool{
+				AllSymbols: []string{"SOLUSDT", "AVAXUSDT"},
+				SymbolSources: map[string][]string{
+					"SOLUSDT":  {"ai500"},
+					"AVAXUSDT": {"ai500", "oi_top"},
+				},
+			}, nil
+		})
+
+		coins, err := s.autoTrader.getCandidateCoins()
+		s.NoError(err)
+		s.Equal(2, len(coins))
+		s.Equal("SOLUSDT", coins[0].Symbol)
+		s.Contains(coins[1].Sources, "oi_top")
 	})
 }
 
