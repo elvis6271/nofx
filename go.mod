@@ -1,6 +1,6 @@
 module nofx
 
-go 1.22
+go 1.23
 
 require (
 	github.com/adshao/go-binance/v2 v2.8.7
@@ -92,4 +92,16 @@ require (
 	modernc.org/libc v1.66.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
+)
+
+// 强制锁定基础库版本以兼容 Go 1.22
+replace (
+	golang.org/x/crypto => golang.org/x/crypto v0.31.0
+	golang.org/x/sys => golang.org/x/sys v0.28.0
+	golang.org/x/text => golang.org/x/text v0.21.0
+	golang.org/x/net => golang.org/x/net v0.33.0
+	github.com/ethereum/go-ethereum => github.com/ethereum/go-ethereum v1.14.12
+	github.com/sonirico/go-hyperliquid => github.com/sonirico/go-hyperliquid v0.10.0
+	golang.org/x/sync => golang.org/x/sync v0.10.0
+	github.com/consensys/gnark-crypto => github.com/consensys/gnark-crypto v0.12.1
 )

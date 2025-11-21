@@ -17,6 +17,7 @@ import (
 // HyperliquidTrader Hyperliquid交易器
 type HyperliquidTrader struct {
 	exchange      *hyperliquid.Exchange
+	info          *hyperliquid.Info     // 独立 Info 客户端 (v0.10.0)
 	ctx           context.Context
 	walletAddr    string
 	meta          *hyperliquid.Meta // 缓存meta信息（包含精度等）
@@ -68,21 +69,25 @@ func NewHyperliquidTrader(privateKeyHex string, walletAddr string, testnet bool)
 
 	ctx := context.Background()
 
-	// 创建Exchange客户端（Exchange包含Info功能）
+	// 创建 Info 客户端
+	// NewInfo(baseURL string, skipCheck bool, meta *hyperliquid.Meta, spotMeta *hyperliquid.SpotMeta)
+	info := hyperliquid.NewInfo(apiURL, false, nil, nil)
+
+	// 创建 Exchange 客户端
+	// NewExchange(privateKey, baseURL, meta, vaultAddress, walletAddress, spotMeta)
 	exchange := hyperliquid.NewExchange(
-		ctx,
 		privateKey,
 		apiURL,
-		nil,        // Meta will be fetched automatically
-		"",         // vault address (empty for personal account)
+		nil,        // Meta
+		"",         // vault address
 		walletAddr, // wallet address
-		nil,        // SpotMeta will be fetched automatically
+		nil,        // SpotMeta
 	)
 
 	log.Printf("✓ Hyperliquid交易器初始化成功 (testnet=%v, wallet=%s)", testnet, walletAddr)
 
 	// 获取meta信息（包含精度等配置）
-	meta, err := exchange.Info().Meta(ctx)
+	meta, err := info.Meta()
 	if err != nil {
 		return nil, fmt.Errorf("获取meta信息失败: %w", err)
 	}
@@ -90,7 +95,7 @@ func NewHyperliquidTrader(privateKeyHex string, walletAddr string, testnet bool)
 	// 🔍 Security check: Validate Agent wallet balance (should be close to 0)
 	// Only check if using separate Agent wallet (not when main wallet is used as agent)
 	if !strings.EqualFold(walletAddr, agentAddr) {
-		agentState, err := exchange.Info().UserState(ctx, agentAddr)
+		agentState, err := info.UserState(agentAddr)
 		if err == nil && agentState != nil && agentState.CrossMarginSummary.AccountValue != "" {
 			// Parse Agent wallet balance
 			agentBalance, _ := strconv.ParseFloat(agentState.CrossMarginSummary.AccountValue, 64)
@@ -122,6 +127,7 @@ func NewHyperliquidTrader(privateKeyHex string, walletAddr string, testnet bool)
 
 	return &HyperliquidTrader{
 		exchange:      exchange,
+		info:          info,
 		ctx:           ctx,
 		walletAddr:    walletAddr,
 		meta:          meta,
@@ -134,7 +140,7 @@ func (t *HyperliquidTrader) GetBalance() (map[string]interface{}, error) {
 	log.Printf("🔄 正在调用Hyperliquid API获取账户余额...")
 
 	// ✅ Step 1: 查询 Spot 现货账户余额
-	spotState, err := t.exchange.Info().SpotUserState(t.ctx, t.walletAddr)
+	spotState, err := t.info.SpotUserState(t.walletAddr)
 	var spotUSDCBalance float64 = 0.0
 	if err != nil {
 		log.Printf("⚠️ 查询 Spot 余额失败（可能无现货资产）: %v", err)
@@ -149,7 +155,7 @@ func (t *HyperliquidTrader) GetBalance() (map[string]interface{}, error) {
 	}
 
 	// ✅ Step 2: 查询 Perpetuals 合约账户状态
-	accountState, err := t.exchange.Info().UserState(t.ctx, t.walletAddr)
+	accountState, err := t.info.UserState(t.walletAddr)
 	if err != nil {
 		log.Printf("❌ Hyperliquid Perpetuals API调用失败: %v", err)
 		return nil, fmt.Errorf("获取账户信息失败: %w", err)
@@ -245,7 +251,7 @@ func (t *HyperliquidTrader) GetBalance() (map[string]interface{}, error) {
 // GetPositions 获取所有持仓
 func (t *HyperliquidTrader) GetPositions() ([]map[string]interface{}, error) {
 	// 获取账户状态
-	accountState, err := t.exchange.Info().UserState(t.ctx, t.walletAddr)
+	accountState, err := t.info.UserState(t.walletAddr)
 	if err != nil {
 		return nil, fmt.Errorf("获取持仓失败: %w", err)
 	}
@@ -327,7 +333,7 @@ func (t *HyperliquidTrader) SetLeverage(symbol string, leverage int) error {
 
 	// 调用UpdateLeverage (leverage int, name string, isCross bool)
 	// 第三个参数: true=全仓模式, false=逐仓模式
-	_, err := t.exchange.UpdateLeverage(t.ctx, leverage, coin, t.isCrossMargin)
+	_, err := t.exchange.UpdateLeverage(leverage, coin, t.isCrossMargin)
 	if err != nil {
 		return fmt.Errorf("设置杠杆失败: %w", err)
 	}
@@ -338,7 +344,7 @@ func (t *HyperliquidTrader) SetLeverage(symbol string, leverage int) error {
 
 // refreshMetaIfNeeded 当 Meta 信息失效时刷新（Asset ID 为 0 时触发）
 func (t *HyperliquidTrader) refreshMetaIfNeeded(coin string) error {
-	assetID := t.exchange.Info().NameToAsset(coin)
+	assetID := t.info.NameToAsset(coin)
 	if assetID != 0 {
 		return nil // Meta 正常，无需刷新
 	}
@@ -346,7 +352,7 @@ func (t *HyperliquidTrader) refreshMetaIfNeeded(coin string) error {
 	log.Printf("⚠️  %s 的 Asset ID 为 0，尝试刷新 Meta 信息...", coin)
 
 	// 刷新 Meta 信息
-	meta, err := t.exchange.Info().Meta(t.ctx)
+	meta, err := t.info.Meta()
 	if err != nil {
 		return fmt.Errorf("刷新 Meta 信息失败: %w", err)
 	}
@@ -359,7 +365,7 @@ func (t *HyperliquidTrader) refreshMetaIfNeeded(coin string) error {
 	log.Printf("✅ Meta 信息已刷新，包含 %d 个资产", len(meta.Universe))
 
 	// 验证刷新后的 Asset ID
-	assetID = t.exchange.Info().NameToAsset(coin)
+	assetID = t.info.NameToAsset(coin)
 	if assetID == 0 {
 		return fmt.Errorf("❌ 即使在刷新 Meta 后，资产 %s 的 Asset ID 仍为 0。可能原因：\n"+
 			"  1. 该币种未在 Hyperliquid 上市\n"+
@@ -414,7 +420,7 @@ func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage i
 		ReduceOnly: false,
 	}
 
-	_, err = t.exchange.Order(t.ctx, order, nil)
+	_, err = t.exchange.Order(order, nil)
 	if err != nil {
 		return nil, fmt.Errorf("开多仓失败: %w", err)
 	}
@@ -472,7 +478,7 @@ func (t *HyperliquidTrader) OpenShort(symbol string, quantity float64, leverage 
 		ReduceOnly: false,
 	}
 
-	_, err = t.exchange.Order(t.ctx, order, nil)
+	_, err = t.exchange.Order(order, nil)
 	if err != nil {
 		return nil, fmt.Errorf("开空仓失败: %w", err)
 	}
@@ -539,7 +545,7 @@ func (t *HyperliquidTrader) CloseLong(symbol string, quantity float64) (map[stri
 		ReduceOnly: true, // 只平仓，不开新仓
 	}
 
-	_, err = t.exchange.Order(t.ctx, order, nil)
+	_, err = t.exchange.Order(order, nil)
 	if err != nil {
 		return nil, fmt.Errorf("平多仓失败: %w", err)
 	}
@@ -611,7 +617,7 @@ func (t *HyperliquidTrader) CloseShort(symbol string, quantity float64) (map[str
 		ReduceOnly: true,
 	}
 
-	_, err = t.exchange.Order(t.ctx, order, nil)
+	_, err = t.exchange.Order(order, nil)
 	if err != nil {
 		return nil, fmt.Errorf("平空仓失败: %w", err)
 	}
@@ -654,7 +660,7 @@ func (t *HyperliquidTrader) CancelAllOrders(symbol string) error {
 	coin := convertSymbolToHyperliquid(symbol)
 
 	// 获取所有挂单
-	openOrders, err := t.exchange.Info().OpenOrders(t.ctx, t.walletAddr)
+	openOrders, err := t.info.OpenOrders(t.walletAddr)
 	if err != nil {
 		return fmt.Errorf("获取挂单失败: %w", err)
 	}
@@ -662,7 +668,7 @@ func (t *HyperliquidTrader) CancelAllOrders(symbol string) error {
 	// 取消该币种的所有挂单
 	for _, order := range openOrders {
 		if order.Coin == coin {
-			_, err := t.exchange.Cancel(t.ctx, coin, order.Oid)
+			_, err := t.exchange.Cancel(coin, order.Oid)
 			if err != nil {
 				log.Printf("  ⚠ 取消订单失败 (oid=%d): %v", order.Oid, err)
 			}
@@ -678,7 +684,7 @@ func (t *HyperliquidTrader) CancelStopOrders(symbol string) error {
 	coin := convertSymbolToHyperliquid(symbol)
 
 	// 获取所有挂单
-	openOrders, err := t.exchange.Info().OpenOrders(t.ctx, t.walletAddr)
+	openOrders, err := t.info.OpenOrders(t.walletAddr)
 	if err != nil {
 		return fmt.Errorf("获取挂单失败: %w", err)
 	}
@@ -689,7 +695,7 @@ func (t *HyperliquidTrader) CancelStopOrders(symbol string) error {
 	canceledCount := 0
 	for _, order := range openOrders {
 		if order.Coin == coin {
-			_, err := t.exchange.Cancel(t.ctx, coin, order.Oid)
+			_, err := t.exchange.Cancel(coin, order.Oid)
 			if err != nil {
 				log.Printf("  ⚠ 取消订单失败 (oid=%d): %v", order.Oid, err)
 				continue
@@ -712,7 +718,7 @@ func (t *HyperliquidTrader) GetMarketPrice(symbol string) (float64, error) {
 	coin := convertSymbolToHyperliquid(symbol)
 
 	// 获取所有市场价格
-	allMids, err := t.exchange.Info().AllMids(t.ctx)
+	allMids, err := t.info.AllMids()
 	if err != nil {
 		return 0, fmt.Errorf("获取价格失败: %w", err)
 	}
@@ -757,7 +763,7 @@ func (t *HyperliquidTrader) SetStopLoss(symbol string, positionSide string, quan
 		ReduceOnly: true,
 	}
 
-	_, err := t.exchange.Order(t.ctx, order, nil)
+	_, err := t.exchange.Order(order, nil)
 	if err != nil {
 		return fmt.Errorf("设置止损失败: %w", err)
 	}
@@ -794,7 +800,7 @@ func (t *HyperliquidTrader) SetTakeProfit(symbol string, positionSide string, qu
 		ReduceOnly: true,
 	}
 
-	_, err := t.exchange.Order(t.ctx, order, nil)
+	_, err := t.exchange.Order(order, nil)
 	if err != nil {
 		return fmt.Errorf("设置止盈失败: %w", err)
 	}

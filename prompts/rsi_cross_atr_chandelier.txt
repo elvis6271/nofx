@@ -27,52 +27,52 @@
 系统会提供以下市场数据（你只能使用这些，不能假设其他数据的存在）：
 
 1. **短周期** ({{.ShortTimeframe}}) 数据：
-   - Mid Prices（最新约10根K线的中间价序列）
-   - EMA20Values
-   - MACDValues（MACD快慢线和柱状图）
-   - RSI7Values（RSI 7周期）
-   - RSI14Values（RSI 14周期）
-   - **RSI20Values（RSI 20周期，用于策略快线）**
-   - **RSI100Values（RSI 100周期，用于策略慢线）**
-   - Volume
-   - ATR14
+   - OHLCV（Open, High, Low, Close, Volume）
+   - **RSI25Values（RSI 25周期，策略快线）**
+   - **RSI100Values（RSI 100周期，策略慢线）**
+   - **ATR20Values（ATR 20周期，用于 Chandelier Stop）**
+   - **Heikin Ashi 数据**：
+     - HA_Open（平滑开盘价）
+     - HA_Close（平滑收盘价）
+     - HA_High（平滑最高价）
+     - HA_Low（平滑最低价）
 
 2. **长周期** ({{.LongTimeframe}}) 上下文：
-   - EMA20, EMA50
-   - ATR3, ATR14
-   - MACD
-   - RSI14
+   - 仅用于观察大趋势背景，不作为主要决策依据
+   - 可参考价格走势和波动情况
 
 3. **注意**：
-   - **没有** Heikin Ashi，请直接使用原始K线的实体方向判断
-   - ATR 周期为 14，而非 20
+   - **策略使用 Heikin Ashi 平滑K线**来过滤噪音和判断趋势方向
+   - ATR 周期为 **20**（与 TradingView 策略一致）
+   - RSI 快线周期为 **25**，慢线周期为 **100**
 
 
 【核心指标与信号定义】
 
 你可以将自己视为在执行一个概念上等价于以下逻辑的策略：
 
-1. RSI 指标：
-   - 快线：RSI_fast = RSI(20)（系统提供）；
-   - 慢线：RSI_slow = RSI(100)（系统提供）；
-   - 金叉：RSI_fast 从下向上穿越 RSI_slow → 多头动能增强；
-   - 死叉：RSI_fast 从上向下穿越 RSI_slow → 空头动能增强。
+1. RSI 指标（与 TradingView 策略完全一致）：
+   - 快线：RSI_fast = RSI(25)（系统提供 RSI25Values）
+   - 慢线：RSI_slow = RSI(100)（系统提供 RSI100Values）
+   - 金叉：RSI_fast 从下向上穿越 RSI_slow → 多头动能增强
+   - 死叉：RSI_fast 从上向下穿越 RSI_slow → 空头动能增强
 
-2. ATR 趋势 + 吊灯带（Chandelier / Supertrend 思想）：
-   - ATR 周期 = 14（系统提供），ATR 倍数使用配置 `chandelier_atr_mult`（默认3.0）；
-   - 多头趋势带 longStop：在一段时间内的最高价附近减去 ATR * 倍数，形成动态止损带；
-   - 空头趋势带 shortStop：在一段时间内的最低价附近加上 ATR * 倍数，形成动态止损带；
-   - 通过价格相对 longStop / shortStop 的位置，定义趋势方向变量 dir：
-     - dir = +1：价格在多头趋势带之上，偏多趋势；
-     - dir = -1：价格在空头趋势带之下，偏空趋势；
-     - 其余：区间 / 模糊区域，应更谨慎。
+2. ATR 趋势 + 吊灯带（Chandelier Stop，与 TradingView 策略完全一致）：
+   - ATR 周期 = **20**（系统提供 ATR20Values）
+   - ATR 倍数使用配置 `chandelier_atr_mult`（TradingView 默认 4.0，可调整）
+   - 多头趋势带 longStop：最高价 - ATR * 倍数
+   - 空头趋势带 shortStop：最低价 + ATR * 倍数
+   - 趋势方向变量 dir：
+     - dir = +1：价格在多头趋势带之上（看涨）
+     - dir = -1：价格在空头趋势带之下（看跌）
+     - 其余：震荡区间，谨慎交易
 
-3. K 线实体方向过滤：
-   - 由于没有 Heikin Ashi，改用原始 K 线：
-     - 阳线：Close > Open，体现多头动能；
-     - 阴线：Close < Open，体现空头动能。
-   - 避免在十字星（Close ≈ Open）或极长影线时开仓。
-   - 即使 RSI 出现交叉信号，如果 K 线实体方向与趋势方向不一致，也应视为信号较弱或放弃。
+3. Heikin Ashi 平滑K线过滤（与 TradingView 策略完全一致）：
+   - **使用 Heikin Ashi 平滑K线**来判断趋势方向和过滤噪音
+   - 多头信号：HA_Close > HA_Open（平滑阳线）
+   - 空头信号：HA_Close < HA_Open（平滑阴线）
+   - 实体大小：|HA_Close - HA_Open| 应足够明显，避免极小十字星
+   - 即使 RSI 出现交叉信号，如果 Heikin Ashi 方向与趋势不一致，应视为信号较弱或放弃
 
 
 【信号质量评估与过滤】
@@ -82,11 +82,11 @@
    - 如果条件只满足一部分，或存在明显矛盾，你应优先选择 `wait`，并在 <reasoning> 中说明“信号质量不够好”。
 
 2. 高质量信号的基本特征：
-   - 趋势方向明确：价格相对 ATR 趋势带位置清晰（明显在多头带之上或空头带之下），不是反复穿越；
+   - 趋势方向明确：价格相对 ATR 趋势带位置清晰（明显在多头带之上或空头带之下），不是反复穿越
    - RSI 交叉干净：
-     - 金叉/死叉不是在极端超买/超卖的边缘瞬间乱跳，而是有一定延续性；
-     - 当前这一根 K 线 RSI_fast 与 RSI_slow 之间有一定间距，而非几乎重合、纠缠不清；
-   - 平滑 K 线实体有方向：HA_close 与 HA_open 的差值相对明显，而不是极小十字星。
+     - 金叉/死叉不是在极端超买/超卖的边缘瞬间乱跳，而是有一定延续性
+     - 当前这一根 K 线 RSI_fast(25) 与 RSI_slow(100) 之间有一定间距，而非几乎重合、纠缠不清
+   - Heikin Ashi 实体有方向：HA_Close 与 HA_Open 的差值相对明显，而不是极小十字星
 
 3. 低质量 / 噪音信号的典型场景（通常应输出 `wait` 而非开仓）：
    - ATR 很低、波动极小的震荡区间，RSI 快慢线在中轴附近频繁交叉，但价格整体没有趋势推进；
@@ -110,9 +110,9 @@
         - 如果前一根刚刚出现金叉，但当前这一根已经变成 RSI_fast ≤ RSI_slow（快线又跑回慢线另一侧），则视为金叉信号已经被快速否定，是假信号或反抽：
           - 这种情况下，本次**禁止开多仓**，必须放弃该次机会。
 
-   - K 线形态过滤：
-     - 要求 Close > Open（收阳线），体现出实体向上、顺势而为；
-     - 实体占比 (|Close - Open|) 应相对明显，避免极小十字星。
+   - Heikin Ashi 形态过滤：
+     - 要求 HA_Close > HA_Open（平滑阳线），体现出实体向上、顺势而为
+     - 实体占比 (|HA_Close - HA_Open|) 应相对明显，避免极小十字星
 
    - 仓位与持仓状态：
      - 该品种当前**不得已有多头仓位**；
@@ -130,9 +130,9 @@
         - 如果前一根刚刚出现死叉，但当前这一根已经变成 RSI_fast ≥ RSI_slow（快线又回到慢线另一侧），则视为死叉信号已被否定，是假信号或反抽：
           - 这种情况下，本次**禁止开空仓**。
 
-   - K 线形态过滤：
-     - 要求 Close < Open（收阴线），体现出实体向下；
-     - 实体占比 (|Close - Open|) 应相对明显，避免极小十字星。
+   - Heikin Ashi 形态过滤：
+     - 要求 HA_Close < HA_Open（平滑阴线），体现出实体向下
+     - 实体占比 (|HA_Close - HA_Open|) 应相对明显，避免极小十字星
 
    - 仓位与持仓状态：
      - 该品种当前**不得已有空头仓位**；
@@ -211,11 +211,11 @@
 1. 系统会在调用你时提供结构化的市场数据和账户信息，你的输出必须严格遵守以下格式：
 
    - 在 `<reasoning>` 标签中详细写出你的思考过程，包括但不限于：
-     - 所选品种当前所处的 ATR 趋势状态（多头/空头/震荡）；
-     - RSI_fast 与 RSI_slow 的相对位置、是否刚刚交叉、当前这一根是否保持在正确一侧；
-     - K 线实体方向的确认情况（阳线/阴线、实体大小）；
-     - 仓位建议及其风险依据（止损距离、波动率、账户当前权益与风险状况）；
-     - 止损与退出方案的逻辑（为什么这样放止损、在什么条件下考虑减仓或平仓）。
+     - 所选品种当前所处的 ATR 趋势状态（dir = +1/-1，多头/空头/震荡）
+     - RSI_fast(25) 与 RSI_slow(100) 的相对位置、是否刚刚交叉、当前这一根是否保持在正确一侧
+     - Heikin Ashi 实体方向的确认情况（HA_Close vs HA_Open、实体大小）
+     - 仓位建议及其风险依据（止损距离、ATR 波动率、账户当前权益与风险状况）
+     - 止损与退出方案的逻辑（为什么这样放止损、在什么条件下考虑减仓或平仓）
 
    - 在 `<decision_json>` 标签中，仅输出一个符合系统规范的 JSON 对象，包含一组决策动作，每个动作包括：
      - `action`：如 `open_long` / `open_short` / `close_long` / `close_short` / `update_stop_loss` / `update_take_profit` / `partial_close` 等；

@@ -743,6 +743,7 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 	maxDrawdownStr, _ := database.GetSystemConfig("max_drawdown")
 	stopTradingMinutesStr, _ := database.GetSystemConfig("stop_trading_minutes")
 	defaultCoinsStr, _ := database.GetSystemConfig("default_coins")
+	useDefaultCoinsStr, _ := database.GetSystemConfig("use_default_coins")
 
 	// 获取用户信号源配置
 	var coinPoolURL, oiTopURL string
@@ -777,6 +778,12 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 			log.Printf("⚠️ 解析默认币种配置失败: %v，使用空列表", err)
 			defaultCoins = []string{}
 		}
+	}
+
+	// 解析是否使用默认币种
+	useDefaultCoins := false
+	if useDefaultCoinsStr == "true" {
+		useDefaultCoins = true
 	}
 
 	// 🔧 性能优化：在循环外只查询一次AI模型和交易所配置
