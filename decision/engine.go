@@ -87,6 +87,7 @@ type Context struct {
 	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
 	ShortTimeframe  string                  `json:"-"` // 短周期K线（如："5m", "15m"）
 	LongTimeframe   string                  `json:"-"` // 长周期K线（如："1h", "4h"）
+	TemplateName    string                  `json:"-"` // 提示词模板名称（用于获取指标配置）
 }
 
 // Decision AI的交易决策
@@ -129,6 +130,12 @@ func GetFullDecision(ctx *Context, mcpClient mcp.AIClient) (*FullDecision, error
 
 // GetFullDecisionWithCustomPrompt 获取AI的完整交易决策（支持自定义prompt和模板选择）
 func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient mcp.AIClient, customPrompt string, overrideBase bool, templateName string) (*FullDecision, error) {
+	// 设置模板名称到上下文（用于获取指标配置）
+	ctx.TemplateName = templateName
+	if ctx.TemplateName == "" {
+		ctx.TemplateName = "default"
+	}
+
 	// 1. 为所有币种获取市场数据
 	if err := fetchMarketDataForContext(ctx); err != nil {
 		return nil, fmt.Errorf("获取市场数据失败: %w", err)
@@ -428,9 +435,18 @@ func buildUserPrompt(ctx *Context) string {
 				pos.EntryPrice, pos.MarkPrice, pos.Quantity, positionValue, pos.UnrealizedPnLPct, pos.UnrealizedPnL, pos.PeakPnLPct,
 				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
 
-			// 使用FormatMarketData输出完整市场数据
+			// 使用FormatMarketData输出完整市场数据（根据模板指标配置）
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
-				sb.WriteString(market.Format(marketData))
+				// 获取模板的指标配置
+				template, err := GetPromptTemplate(ctx.TemplateName)
+				if err == nil && template.IndicatorConfig != nil {
+					// 转换为 market 包的 IndicatorConfig
+					marketConfig := convertToMarketConfig(template.IndicatorConfig)
+					sb.WriteString(market.FormatWithConfig(marketData, marketConfig))
+				} else {
+					// 使用默认格式（所有指标）
+					sb.WriteString(market.Format(marketData))
+				}
 				sb.WriteString("\n")
 			}
 		}
@@ -455,9 +471,18 @@ func buildUserPrompt(ctx *Context) string {
 			sourceTags = " (OI_Top持仓增长)"
 		}
 
-		// 使用FormatMarketData输出完整市场数据
+		// 使用FormatMarketData输出完整市场数据（根据模板指标配置）
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
-		sb.WriteString(market.Format(marketData))
+		// 获取模板的指标配置
+		template, err := GetPromptTemplate(ctx.TemplateName)
+		if err == nil && template.IndicatorConfig != nil {
+			// 转换为 market 包的 IndicatorConfig
+			marketConfig := convertToMarketConfig(template.IndicatorConfig)
+			sb.WriteString(market.FormatWithConfig(marketData, marketConfig))
+		} else {
+			// 使用默认格式（所有指标）
+			sb.WriteString(market.Format(marketData))
+		}
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")

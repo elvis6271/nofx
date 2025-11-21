@@ -11,8 +11,30 @@ import (
 
 // PromptTemplate 系统提示词模板
 type PromptTemplate struct {
-	Name    string // 模板名称（文件名，不含扩展名）
-	Content string // 模板内容
+	Name              string            // 模板名称（文件名，不含扩展名）
+	Content           string            // 模板内容
+	IndicatorConfig   *IndicatorConfig  // 指标配置（从模板头部解析）
+}
+
+// IndicatorConfig 指标配置
+type IndicatorConfig struct {
+	// 短周期指标
+	UseEMA20    bool
+	UseMACDValues bool
+	UseRSI7     bool
+	UseRSI14    bool
+	UseRSI20    bool
+	UseRSI25    bool
+	UseRSI100   bool
+	UseATR14    bool
+	UseATR20    bool
+	UseHeikinAshi bool
+	
+	// 长周期指标
+	UseLongEMA    bool
+	UseLongATR    bool
+	UseLongMACD   bool
+	UseLongRSI14  bool
 }
 
 // PromptManager 提示词管理器
@@ -79,10 +101,14 @@ func (pm *PromptManager) LoadTemplates(dir string) error {
 		fileName := filepath.Base(file)
 		templateName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
 
+		// 解析指标配置
+		indicatorConfig := parseIndicatorConfig(string(content))
+
 		// 存储模板
 		pm.templates[templateName] = &PromptTemplate{
-			Name:    templateName,
-			Content: string(content),
+			Name:            templateName,
+			Content:         string(content),
+			IndicatorConfig: indicatorConfig,
 		}
 
 		log.Printf("  📄 加载提示词模板: %s (%s)", templateName, fileName)
@@ -159,4 +185,148 @@ func GetAllPromptTemplates() []*PromptTemplate {
 // ReloadPromptTemplates 重新加载所有模板（全局函数）
 func ReloadPromptTemplates() error {
 	return globalPromptManager.ReloadTemplates(promptsDir)
+}
+
+// parseIndicatorConfig 从提示词内容中解析指标配置
+// 支持两种格式：
+// 1. YAML格式（在文件开头）：
+//    ---indicators
+//    rsi25: true
+//    rsi100: true
+//    ---
+// 2. 注释格式（兼容旧提示词）：
+//    # @indicators: rsi25,rsi100,atr20,heikin_ashi
+func parseIndicatorConfig(content string) *IndicatorConfig {
+	config := &IndicatorConfig{}
+	
+	// 默认配置：如果没有指定，则使用所有指标（向后兼容）
+	defaultAll := true
+	
+	lines := strings.Split(content, "\n")
+	inIndicatorBlock := false
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		
+		// 检查 YAML 格式的指标配置块
+		if line == "---indicators" {
+			inIndicatorBlock = true
+			defaultAll = false
+			continue
+		}
+		if line == "---" && inIndicatorBlock {
+			break
+		}
+		
+		// 解析 YAML 格式的配置
+		if inIndicatorBlock {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				enabled := value == "true" || value == "yes" || value == "1"
+				
+				switch key {
+				case "ema20":
+					config.UseEMA20 = enabled
+				case "macd":
+					config.UseMACDValues = enabled
+				case "rsi7":
+					config.UseRSI7 = enabled
+				case "rsi14":
+					config.UseRSI14 = enabled
+				case "rsi20":
+					config.UseRSI20 = enabled
+				case "rsi25":
+					config.UseRSI25 = enabled
+				case "rsi100":
+					config.UseRSI100 = enabled
+				case "atr14":
+					config.UseATR14 = enabled
+				case "atr20":
+					config.UseATR20 = enabled
+				case "heikin_ashi":
+					config.UseHeikinAshi = enabled
+				case "long_ema":
+					config.UseLongEMA = enabled
+				case "long_atr":
+					config.UseLongATR = enabled
+				case "long_macd":
+					config.UseLongMACD = enabled
+				case "long_rsi14":
+					config.UseLongRSI14 = enabled
+				}
+			}
+			continue
+		}
+		
+		// 检查注释格式的配置
+		if strings.HasPrefix(line, "#") && strings.Contains(line, "@indicators:") {
+			defaultAll = false
+			// 提取指标列表
+			parts := strings.SplitN(line, "@indicators:", 2)
+			if len(parts) == 2 {
+				indicators := strings.Split(parts[1], ",")
+				for _, ind := range indicators {
+					ind = strings.TrimSpace(ind)
+					switch ind {
+					case "ema20":
+						config.UseEMA20 = true
+					case "macd":
+						config.UseMACDValues = true
+					case "rsi7":
+						config.UseRSI7 = true
+					case "rsi14":
+						config.UseRSI14 = true
+					case "rsi20":
+						config.UseRSI20 = true
+					case "rsi25":
+						config.UseRSI25 = true
+					case "rsi100":
+						config.UseRSI100 = true
+					case "atr14":
+						config.UseATR14 = true
+					case "atr20":
+						config.UseATR20 = true
+					case "heikin_ashi":
+						config.UseHeikinAshi = true
+					case "long_ema":
+						config.UseLongEMA = true
+					case "long_atr":
+						config.UseLongATR = true
+					case "long_macd":
+						config.UseLongMACD = true
+					case "long_rsi14":
+						config.UseLongRSI14 = true
+					}
+				}
+			}
+			break
+		}
+		
+		// 如果已经过了前几行还没找到配置，就停止查找
+		if len(line) > 0 && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "---") {
+			break
+		}
+	}
+	
+	// 如果没有找到配置，使用默认配置（所有指标都启用，向后兼容）
+	if defaultAll {
+		config.UseEMA20 = true
+		config.UseMACDValues = true
+		config.UseRSI7 = true
+		config.UseRSI14 = true
+		config.UseRSI20 = true
+		config.UseRSI25 = true
+		config.UseRSI100 = true
+		config.UseATR14 = true
+		config.UseATR20 = true
+		config.UseHeikinAshi = true
+		config.UseLongEMA = true
+		config.UseLongATR = true
+		config.UseLongMACD = true
+		config.UseLongRSI14 = true
+	}
+	
+	return config
 }
