@@ -187,20 +187,30 @@ func ReloadPromptTemplates() error {
 	return globalPromptManager.ReloadTemplates(promptsDir)
 }
 
-// parseIndicatorConfig 从提示词内容中解析指标配置
-// 支持两种格式：
-// 1. YAML格式（在文件开头）：
+// parseIndicatorConfig 从提示词内容中自动检测使用的指标
+// 支持三种模式：
+// 1. 显式配置（YAML格式）：
 //    ---indicators
 //    rsi25: true
-//    rsi100: true
 //    ---
-// 2. 注释格式（兼容旧提示词）：
-//    # @indicators: rsi25,rsi100,atr20,heikin_ashi
+// 2. 显式配置（注释格式）：
+//    # @indicators: rsi25,rsi100,atr20
+// 3. 自动检测（默认）：分析提示词内容，检测提到的指标关键词
 func parseIndicatorConfig(content string) *IndicatorConfig {
-	config := &IndicatorConfig{}
+	// 先尝试解析显式配置
+	explicitConfig := parseExplicitConfig(content)
+	if explicitConfig != nil {
+		return explicitConfig
+	}
 	
-	// 默认配置：如果没有指定，则使用所有指标（向后兼容）
-	defaultAll := true
+	// 没有显式配置，使用自动检测
+	return autoDetectIndicators(content)
+}
+
+// parseExplicitConfig 解析显式指标配置
+func parseExplicitConfig(content string) *IndicatorConfig {
+	config := &IndicatorConfig{}
+	hasExplicitConfig := false
 	
 	lines := strings.Split(content, "\n")
 	inIndicatorBlock := false
@@ -208,125 +218,196 @@ func parseIndicatorConfig(content string) *IndicatorConfig {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		
-		// 检查 YAML 格式的指标配置块
+		// 检查 YAML 格式
 		if line == "---indicators" {
 			inIndicatorBlock = true
-			defaultAll = false
+			hasExplicitConfig = true
 			continue
 		}
 		if line == "---" && inIndicatorBlock {
 			break
 		}
 		
-		// 解析 YAML 格式的配置
 		if inIndicatorBlock {
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
 				key := strings.TrimSpace(parts[0])
 				value := strings.TrimSpace(parts[1])
 				enabled := value == "true" || value == "yes" || value == "1"
-				
-				switch key {
-				case "ema20":
-					config.UseEMA20 = enabled
-				case "macd":
-					config.UseMACDValues = enabled
-				case "rsi7":
-					config.UseRSI7 = enabled
-				case "rsi14":
-					config.UseRSI14 = enabled
-				case "rsi20":
-					config.UseRSI20 = enabled
-				case "rsi25":
-					config.UseRSI25 = enabled
-				case "rsi100":
-					config.UseRSI100 = enabled
-				case "atr14":
-					config.UseATR14 = enabled
-				case "atr20":
-					config.UseATR20 = enabled
-				case "heikin_ashi":
-					config.UseHeikinAshi = enabled
-				case "long_ema":
-					config.UseLongEMA = enabled
-				case "long_atr":
-					config.UseLongATR = enabled
-				case "long_macd":
-					config.UseLongMACD = enabled
-				case "long_rsi14":
-					config.UseLongRSI14 = enabled
-				}
+				setIndicatorFlag(config, key, enabled)
 			}
 			continue
 		}
 		
-		// 检查注释格式的配置
+		// 检查注释格式
 		if strings.HasPrefix(line, "#") && strings.Contains(line, "@indicators:") {
-			defaultAll = false
-			// 提取指标列表
+			hasExplicitConfig = true
 			parts := strings.SplitN(line, "@indicators:", 2)
 			if len(parts) == 2 {
 				indicators := strings.Split(parts[1], ",")
 				for _, ind := range indicators {
-					ind = strings.TrimSpace(ind)
-					switch ind {
-					case "ema20":
-						config.UseEMA20 = true
-					case "macd":
-						config.UseMACDValues = true
-					case "rsi7":
-						config.UseRSI7 = true
-					case "rsi14":
-						config.UseRSI14 = true
-					case "rsi20":
-						config.UseRSI20 = true
-					case "rsi25":
-						config.UseRSI25 = true
-					case "rsi100":
-						config.UseRSI100 = true
-					case "atr14":
-						config.UseATR14 = true
-					case "atr20":
-						config.UseATR20 = true
-					case "heikin_ashi":
-						config.UseHeikinAshi = true
-					case "long_ema":
-						config.UseLongEMA = true
-					case "long_atr":
-						config.UseLongATR = true
-					case "long_macd":
-						config.UseLongMACD = true
-					case "long_rsi14":
-						config.UseLongRSI14 = true
-					}
+					setIndicatorFlag(config, strings.TrimSpace(ind), true)
 				}
 			}
 			break
 		}
 		
-		// 如果已经过了前几行还没找到配置，就停止查找
+		// 只检查前面几行
 		if len(line) > 0 && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "---") {
 			break
 		}
 	}
 	
-	// 如果没有找到配置，使用默认配置（所有指标都启用，向后兼容）
-	if defaultAll {
+	if hasExplicitConfig {
+		return config
+	}
+	return nil
+}
+
+// autoDetectIndicators 自动检测提示词中使用的指标
+func autoDetectIndicators(content string) *IndicatorConfig {
+	config := &IndicatorConfig{}
+	contentLower := strings.ToLower(content)
+	
+	// 检测短周期指标
+	// EMA20
+	if strings.Contains(contentLower, "ema") && 
+	   (strings.Contains(contentLower, "ema20") || strings.Contains(contentLower, "ema(20") || 
+	    strings.Contains(contentLower, "20-period ema") || strings.Contains(contentLower, "20周期ema")) {
 		config.UseEMA20 = true
+	}
+	
+	// MACD
+	if strings.Contains(contentLower, "macd") {
 		config.UseMACDValues = true
-		config.UseRSI7 = true
-		config.UseRSI14 = true
-		config.UseRSI20 = true
-		config.UseRSI25 = true
-		config.UseRSI100 = true
-		config.UseATR14 = true
-		config.UseATR20 = true
+	}
+	
+	// RSI 各周期
+	if strings.Contains(contentLower, "rsi") {
+		if strings.Contains(contentLower, "rsi7") || strings.Contains(contentLower, "rsi(7") || 
+		   strings.Contains(contentLower, "7-period rsi") || strings.Contains(contentLower, "7周期rsi") {
+			config.UseRSI7 = true
+		}
+		if strings.Contains(contentLower, "rsi14") || strings.Contains(contentLower, "rsi(14") || 
+		   strings.Contains(contentLower, "14-period rsi") || strings.Contains(contentLower, "14周期rsi") {
+			config.UseRSI14 = true
+		}
+		if strings.Contains(contentLower, "rsi20") || strings.Contains(contentLower, "rsi(20") || 
+		   strings.Contains(contentLower, "20-period rsi") || strings.Contains(contentLower, "20周期rsi") {
+			config.UseRSI20 = true
+		}
+		if strings.Contains(contentLower, "rsi25") || strings.Contains(contentLower, "rsi(25") || 
+		   strings.Contains(contentLower, "25-period rsi") || strings.Contains(contentLower, "25周期rsi") {
+			config.UseRSI25 = true
+		}
+		if strings.Contains(contentLower, "rsi100") || strings.Contains(contentLower, "rsi(100") || 
+		   strings.Contains(contentLower, "100-period rsi") || strings.Contains(contentLower, "100周期rsi") {
+			config.UseRSI100 = true
+		}
+	}
+	
+	// ATR
+	if strings.Contains(contentLower, "atr") {
+		if strings.Contains(contentLower, "atr14") || strings.Contains(contentLower, "atr(14") || 
+		   strings.Contains(contentLower, "14-period atr") || strings.Contains(contentLower, "14周期atr") {
+			config.UseATR14 = true
+		}
+		if strings.Contains(contentLower, "atr20") || strings.Contains(contentLower, "atr(20") || 
+		   strings.Contains(contentLower, "20-period atr") || strings.Contains(contentLower, "20周期atr") {
+			config.UseATR20 = true
+		}
+	}
+	
+	// Heikin Ashi
+	if strings.Contains(contentLower, "heikin") || strings.Contains(contentLower, "平滑k线") {
 		config.UseHeikinAshi = true
-		config.UseLongEMA = true
-		config.UseLongATR = true
-		config.UseLongMACD = true
-		config.UseLongRSI14 = true
+	}
+	
+	// 检测长周期指标
+	if strings.Contains(contentLower, "长周期") || strings.Contains(contentLower, "longer-term") || 
+	   strings.Contains(contentLower, "4h") || strings.Contains(contentLower, "1h") {
+		// 如果提到长周期上下文，启用长周期指标
+		if strings.Contains(contentLower, "ema") {
+			config.UseLongEMA = true
+		}
+		if strings.Contains(contentLower, "atr") && !config.UseATR14 && !config.UseATR20 {
+			config.UseLongATR = true
+		}
+		if strings.Contains(contentLower, "macd") && !config.UseMACDValues {
+			config.UseLongMACD = true
+		}
+		if strings.Contains(contentLower, "rsi") && !config.UseRSI7 && !config.UseRSI14 && 
+		   !config.UseRSI20 && !config.UseRSI25 && !config.UseRSI100 {
+			config.UseLongRSI14 = true
+		}
+	}
+	
+	// 如果没有检测到任何指标，使用所有指标（向后兼容旧提示词）
+	if !hasAnyIndicator(config) {
+		return getDefaultAllConfig()
 	}
 	
 	return config
+}
+
+// setIndicatorFlag 设置指标标志
+func setIndicatorFlag(config *IndicatorConfig, key string, enabled bool) {
+	switch key {
+	case "ema20":
+		config.UseEMA20 = enabled
+	case "macd":
+		config.UseMACDValues = enabled
+	case "rsi7":
+		config.UseRSI7 = enabled
+	case "rsi14":
+		config.UseRSI14 = enabled
+	case "rsi20":
+		config.UseRSI20 = enabled
+	case "rsi25":
+		config.UseRSI25 = enabled
+	case "rsi100":
+		config.UseRSI100 = enabled
+	case "atr14":
+		config.UseATR14 = enabled
+	case "atr20":
+		config.UseATR20 = enabled
+	case "heikin_ashi", "heikin-ashi", "heikinashi":
+		config.UseHeikinAshi = enabled
+	case "long_ema":
+		config.UseLongEMA = enabled
+	case "long_atr":
+		config.UseLongATR = enabled
+	case "long_macd":
+		config.UseLongMACD = enabled
+	case "long_rsi14":
+		config.UseLongRSI14 = enabled
+	}
+}
+
+// hasAnyIndicator 检查是否有任何指标被启用
+func hasAnyIndicator(config *IndicatorConfig) bool {
+	return config.UseEMA20 || config.UseMACDValues || config.UseRSI7 || config.UseRSI14 ||
+		config.UseRSI20 || config.UseRSI25 || config.UseRSI100 || config.UseATR14 ||
+		config.UseATR20 || config.UseHeikinAshi || config.UseLongEMA || config.UseLongATR ||
+		config.UseLongMACD || config.UseLongRSI14
+}
+
+// getDefaultAllConfig 返回默认配置（所有指标）
+func getDefaultAllConfig() *IndicatorConfig {
+	return &IndicatorConfig{
+		UseEMA20:      true,
+		UseMACDValues: true,
+		UseRSI7:       true,
+		UseRSI14:      true,
+		UseRSI20:      true,
+		UseRSI25:      true,
+		UseRSI100:     true,
+		UseATR14:      true,
+		UseATR20:      true,
+		UseHeikinAshi: true,
+		UseLongEMA:    true,
+		UseLongATR:    true,
+		UseLongMACD:   true,
+		UseLongRSI14:  true,
+	}
 }
