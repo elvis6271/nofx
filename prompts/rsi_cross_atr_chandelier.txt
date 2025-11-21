@@ -24,14 +24,14 @@
 
 【可用数据声明】
 
-系统会提供以下市场数据（你只能使用这些，不能假设其他数据的存在）：
+⚠️ **重要：系统会提供多种指标数据，但本策略只使用以下指标，请忽略其他所有指标（如 EMA20, MACD, RSI7, RSI14, RSI20, ATR14 等）**
 
-1. **短周期** ({{.ShortTimeframe}}) 数据：
+1. **短周期** ({{.ShortTimeframe}}) 数据 - **本策略使用的指标**：
    - OHLCV（Open, High, Low, Close, Volume）
-   - **RSI25Values（RSI 25周期，策略快线）**
-   - **RSI100Values（RSI 100周期，策略慢线）**
-   - **ATR20Values（ATR 20周期，用于 Chandelier Stop）**
-   - **Heikin Ashi 数据**：
+   - **RSI25Values（RSI 25周期，策略快线）** ← 只用这个 RSI
+   - **RSI100Values（RSI 100周期，策略慢线）** ← 只用这个 RSI
+   - **ATR20Values（ATR 20周期，用于 Chandelier Stop）** ← 只用这个 ATR
+   - **Heikin Ashi 数据**（平滑K线，用于判断趋势方向）：
      - HA_Open（平滑开盘价）
      - HA_Close（平滑收盘价）
      - HA_High（平滑最高价）
@@ -39,12 +39,13 @@
 
 2. **长周期** ({{.LongTimeframe}}) 上下文：
    - 仅用于观察大趋势背景，不作为主要决策依据
-   - 可参考价格走势和波动情况
+   - 可参考价格走势和成交量情况
 
-3. **注意**：
-   - **策略使用 Heikin Ashi 平滑K线**来过滤噪音和判断趋势方向
-   - ATR 周期为 **20**（与 TradingView 策略一致）
-   - RSI 快线周期为 **25**，慢线周期为 **100**
+3. **严格遵守**：
+   - **忽略所有其他指标**：系统会提供 EMA20, MACD, RSI7, RSI14, RSI20, ATR14 等指标，但这些都不是本策略的一部分，请完全忽略
+   - **只使用上述列出的指标**：RSI(25), RSI(100), ATR(20), Heikin Ashi
+   - **策略使用 Heikin Ashi 平滑K线**来过滤噪音和判断趋势方向，而不是原始K线
+   - 与 TradingView 策略完全一致
 
 
 【核心指标与信号定义】
