@@ -89,8 +89,8 @@ func (m *WSMonitor) initializeHistoricalData() error {
 			defer wg.Done()
 			defer func() { <-semaphore }()
 
-			// 获取历史K线数据
-			klines, err := apiClient.GetKlines(s, "3m", 100)
+			// 获取历史K线数据（增加到150根以确保RSI100有足够数据）
+			klines, err := apiClient.GetKlines(s, "3m", 150)
 			if err != nil {
 				log.Printf("获取 %s 历史数据失败: %v", s, err)
 				return
@@ -100,7 +100,7 @@ func (m *WSMonitor) initializeHistoricalData() error {
 				log.Printf("已加载 %s 的历史K线数据-3m: %d 条", s, len(klines))
 			}
 			// 获取历史K线数据
-			klines4h, err := apiClient.GetKlines(s, "4h", 100)
+			klines4h, err := apiClient.GetKlines(s, "4h", 150)
 			if err != nil {
 				log.Printf("获取 %s 历史数据失败: %v", s, err)
 				return

@@ -32,10 +32,17 @@ type IntradayData struct {
 	MACDValues   []float64
 	RSI7Values   []float64
 	RSI14Values  []float64
-	RSI20Values  []float64 // RSI(20) for strategy
-	RSI100Values []float64 // RSI(100) for strategy
+	RSI20Values  []float64  // RSI(20) for old strategy
+	RSI25Values  []float64  // RSI(25) for new strategy (TradingView)
+	RSI100Values []float64  // RSI(100) for strategy
 	Volume       []float64
-	ATR14        float64
+	ATR14        float64    // ATR(14) for old strategy
+	ATR20        float64    // ATR(20) for new strategy (TradingView)
+	// Heikin Ashi data for new strategy
+	HAOpen       []float64  // Heikin Ashi Open
+	HAClose      []float64  // Heikin Ashi Close
+	HAHigh       []float64  // Heikin Ashi High
+	HALow        []float64  // Heikin Ashi Low
 }
 
 // LongerTermData 长期数据(4小时时间框架)

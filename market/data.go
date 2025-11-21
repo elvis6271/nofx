@@ -237,8 +237,13 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 		RSI7Values:   make([]float64, 0, 10),
 		RSI14Values:  make([]float64, 0, 10),
 		RSI20Values:  make([]float64, 0, 10),
+		RSI25Values:  make([]float64, 0, 10),
 		RSI100Values: make([]float64, 0, 10),
 		Volume:       make([]float64, 0, 10),
+		HAOpen:       make([]float64, 0, 10),
+		HAClose:      make([]float64, 0, 10),
+		HAHigh:       make([]float64, 0, 10),
+		HALow:        make([]float64, 0, 10),
 	}
 
 	// 获取最近10个数据点
@@ -276,14 +281,33 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 			rsi20 := calculateRSI(klines[:i+1], 20)
 			data.RSI20Values = append(data.RSI20Values, rsi20)
 		}
+		if i >= 25 {
+			rsi25 := calculateRSI(klines[:i+1], 25)
+			data.RSI25Values = append(data.RSI25Values, rsi25)
+		}
 		if i >= 100 {
 			rsi100 := calculateRSI(klines[:i+1], 100)
 			data.RSI100Values = append(data.RSI100Values, rsi100)
 		}
 	}
 
-	// 计算3m ATR14
+	// 计算 Heikin Ashi 数据
+	haData := calculateHeikinAshi(klines)
+	// 获取最近10个 Heikin Ashi 数据点
+	haStart := len(haData) - 10
+	if haStart < 0 {
+		haStart = 0
+	}
+	for i := haStart; i < len(haData); i++ {
+		data.HAOpen = append(data.HAOpen, haData[i].Open)
+		data.HAClose = append(data.HAClose, haData[i].Close)
+		data.HAHigh = append(data.HAHigh, haData[i].High)
+		data.HALow = append(data.HALow, haData[i].Low)
+	}
+
+	// 计算 ATR
 	data.ATR14 = calculateATR(klines, 14)
+	data.ATR20 = calculateATR(klines, 20)
 
 	return data
 }
@@ -469,8 +493,12 @@ func Format(data *Data) string {
 			sb.WriteString(fmt.Sprintf("RSI indicators (20‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI20Values)))
 		}
 
+		if len(data.IntradaySeries.RSI25Values) > 0 {
+			sb.WriteString(fmt.Sprintf("RSI indicators (25‑Period, TradingView Strategy): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI25Values)))
+		}
+
 		if len(data.IntradaySeries.RSI100Values) > 0 {
-			sb.WriteString(fmt.Sprintf("RSI indicators (100‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI100Values)))
+			sb.WriteString(fmt.Sprintf("RSI indicators (100‑Period, TradingView Strategy): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI100Values)))
 		}
 
 		if len(data.IntradaySeries.Volume) > 0 {
@@ -478,6 +506,21 @@ func Format(data *Data) string {
 		}
 
 		sb.WriteString(fmt.Sprintf("%s ATR (14‑period): %.3f\n\n", data.ShortTimeframe, data.IntradaySeries.ATR14))
+		sb.WriteString(fmt.Sprintf("%s ATR (20‑period, TradingView Strategy): %.3f\n\n", data.ShortTimeframe, data.IntradaySeries.ATR20))
+
+		// Heikin Ashi 数据
+		if len(data.IntradaySeries.HAOpen) > 0 {
+			sb.WriteString(fmt.Sprintf("Heikin Ashi Open (TradingView Strategy): %s\n\n", formatFloatSlice(data.IntradaySeries.HAOpen)))
+		}
+		if len(data.IntradaySeries.HAClose) > 0 {
+			sb.WriteString(fmt.Sprintf("Heikin Ashi Close (TradingView Strategy): %s\n\n", formatFloatSlice(data.IntradaySeries.HAClose)))
+		}
+		if len(data.IntradaySeries.HAHigh) > 0 {
+			sb.WriteString(fmt.Sprintf("Heikin Ashi High (TradingView Strategy): %s\n\n", formatFloatSlice(data.IntradaySeries.HAHigh)))
+		}
+		if len(data.IntradaySeries.HALow) > 0 {
+			sb.WriteString(fmt.Sprintf("Heikin Ashi Low (TradingView Strategy): %s\n\n", formatFloatSlice(data.IntradaySeries.HALow)))
+		}
 	}
 
 	if data.LongerTermContext != nil {
@@ -611,4 +654,47 @@ func isStaleData(klines []Kline, symbol string) bool {
 	// Price frozen but has volume: might be extremely low volatility market, allow but log warning
 	log.Printf("⚠️  %s detected extreme price stability (no fluctuation for %d consecutive periods), but volume is normal", symbol, stalePriceThreshold)
 	return false
+}
+
+// calculateHeikinAshi 计算 Heikin Ashi 平滑K线
+func calculateHeikinAshi(klines []Kline) []Kline {
+	if len(klines) == 0 {
+		return []Kline{}
+	}
+
+	haKlines := make([]Kline, len(klines))
+	
+	// 第一根 Heikin Ashi K线
+	haKlines[0] = Kline{
+		Open:   (klines[0].Open + klines[0].Close) / 2,
+		Close:  (klines[0].Open + klines[0].High + klines[0].Low + klines[0].Close) / 4,
+		High:   klines[0].High,
+		Low:    klines[0].Low,
+		Volume: klines[0].Volume,
+	}
+
+	// 后续 Heikin Ashi K线
+	for i := 1; i < len(klines); i++ {
+		// HA Close = (Open + High + Low + Close) / 4
+		haClose := (klines[i].Open + klines[i].High + klines[i].Low + klines[i].Close) / 4
+		
+		// HA Open = (Previous HA Open + Previous HA Close) / 2
+		haOpen := (haKlines[i-1].Open + haKlines[i-1].Close) / 2
+		
+		// HA High = Max(High, HA Open, HA Close)
+		haHigh := math.Max(klines[i].High, math.Max(haOpen, haClose))
+		
+		// HA Low = Min(Low, HA Open, HA Close)
+		haLow := math.Min(klines[i].Low, math.Min(haOpen, haClose))
+		
+		haKlines[i] = Kline{
+			Open:   haOpen,
+			Close:  haClose,
+			High:   haHigh,
+			Low:    haLow,
+			Volume: klines[i].Volume,
+		}
+	}
+
+	return haKlines
 }
