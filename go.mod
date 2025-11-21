@@ -18,7 +18,7 @@ require (
 	github.com/sonirico/go-hyperliquid v0.16.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.31.0
-	modernc.org/sqlite v1.40.0
+	modernc.org/sqlite v1.29.10
 )
 
 require (
