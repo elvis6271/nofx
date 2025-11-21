@@ -450,8 +450,8 @@ func Format(data *Data) string {
 
 	// 使用动态精度格式化价格
 	priceStr := formatPriceWithDynamicPrecision(data.CurrentPrice)
-	sb.WriteString(fmt.Sprintf("current_price = %s, current_ema20 = %.3f, current_macd = %.3f, current_rsi (7 period) = %.3f\n\n",
-		priceStr, data.CurrentEMA20, data.CurrentMACD, data.CurrentRSI7))
+	// 只输出价格，不输出旧指标（EMA20, MACD, RSI7）以避免与新策略混淆
+	sb.WriteString(fmt.Sprintf("current_price = %s\n\n", priceStr))
 
 	sb.WriteString(fmt.Sprintf("In addition, here is the latest %s open interest and funding rate for perps:\n\n",
 		data.Symbol))
@@ -473,26 +473,6 @@ func Format(data *Data) string {
 			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.IntradaySeries.MidPrices)))
 		}
 
-		if len(data.IntradaySeries.EMA20Values) > 0 {
-			sb.WriteString(fmt.Sprintf("EMA indicators (20‑period): %s\n\n", formatFloatSlice(data.IntradaySeries.EMA20Values)))
-		}
-
-		if len(data.IntradaySeries.MACDValues) > 0 {
-			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.IntradaySeries.MACDValues)))
-		}
-
-		if len(data.IntradaySeries.RSI7Values) > 0 {
-			sb.WriteString(fmt.Sprintf("RSI indicators (7‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI7Values)))
-		}
-
-		if len(data.IntradaySeries.RSI14Values) > 0 {
-			sb.WriteString(fmt.Sprintf("RSI indicators (14‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI14Values)))
-		}
-
-		if len(data.IntradaySeries.RSI20Values) > 0 {
-			sb.WriteString(fmt.Sprintf("RSI indicators (20‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI20Values)))
-		}
-
 		if len(data.IntradaySeries.RSI25Values) > 0 {
 			sb.WriteString(fmt.Sprintf("RSI indicators (25‑Period, TradingView Strategy): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI25Values)))
 		}
@@ -505,7 +485,6 @@ func Format(data *Data) string {
 			sb.WriteString(fmt.Sprintf("Volume: %s\n\n", formatFloatSlice(data.IntradaySeries.Volume)))
 		}
 
-		sb.WriteString(fmt.Sprintf("%s ATR (14‑period): %.3f\n\n", data.ShortTimeframe, data.IntradaySeries.ATR14))
 		sb.WriteString(fmt.Sprintf("%s ATR (20‑period, TradingView Strategy): %.3f\n\n", data.ShortTimeframe, data.IntradaySeries.ATR20))
 
 		// Heikin Ashi 数据
@@ -526,22 +505,23 @@ func Format(data *Data) string {
 	if data.LongerTermContext != nil {
 		sb.WriteString(fmt.Sprintf("Longer‑term context (%s timeframe):\n\n", data.LongTimeframe))
 
-		sb.WriteString(fmt.Sprintf("20‑Period EMA: %.3f vs. 50‑Period EMA: %.3f\n\n",
-			data.LongerTermContext.EMA20, data.LongerTermContext.EMA50))
-
-		sb.WriteString(fmt.Sprintf("3‑Period ATR: %.3f vs. 14‑Period ATR: %.3f\n\n",
-			data.LongerTermContext.ATR3, data.LongerTermContext.ATR14))
+		// 长周期数据仅作为背景参考，不作为主要决策依据
+		// 旧指标已注释，避免与新策略混淆
+		// sb.WriteString(fmt.Sprintf("20‑Period EMA: %.3f vs. 50‑Period EMA: %.3f\n\n",
+		// 	data.LongerTermContext.EMA20, data.LongerTermContext.EMA50))
+		// sb.WriteString(fmt.Sprintf("3‑Period ATR: %.3f vs. 14‑Period ATR: %.3f\n\n",
+		// 	data.LongerTermContext.ATR3, data.LongerTermContext.ATR14))
 
 		sb.WriteString(fmt.Sprintf("Current Volume: %.3f vs. Average Volume: %.3f\n\n",
 			data.LongerTermContext.CurrentVolume, data.LongerTermContext.AverageVolume))
 
-		if len(data.LongerTermContext.MACDValues) > 0 {
-			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.LongerTermContext.MACDValues)))
-		}
-
-		if len(data.LongerTermContext.RSI14Values) > 0 {
-			sb.WriteString(fmt.Sprintf("RSI indicators (14‑Period): %s\n\n", formatFloatSlice(data.LongerTermContext.RSI14Values)))
-		}
+		// MACD 和 RSI14 不在新策略中使用
+		// if len(data.LongerTermContext.MACDValues) > 0 {
+		// 	sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.LongerTermContext.MACDValues)))
+		// }
+		// if len(data.LongerTermContext.RSI14Values) > 0 {
+		// 	sb.WriteString(fmt.Sprintf("RSI indicators (14‑Period): %s\n\n", formatFloatSlice(data.LongerTermContext.RSI14Values)))
+		// }
 	}
 
 	return sb.String()
